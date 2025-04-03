@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">WhatsTap2</string>
+    <string name="add_contact">Add Contact</string>
+    <string name="edit_contact">Edit Contact</string>
+    <string name="contact_photo">Contact Photo</string>
+    <string name="contact_name">Contact Name</string>
+    <string name="contact_number">Contact Number</string>
+    <string name="name_hint">Name</string>
+    <string name="phone_hint">Phone Number</string>
+    <string name="save">Save</string>
+    <string name="cancel">Cancel</string>
+    <string name="invalid_phone">Please enter a valid name and phone number</string>
+    <string name="permission_required">Permission Required</string>
+    <string name="contacts_permission_message">This app needs access to your contacts to function properly.</string>
+    <string name="grant_permission">Grant Permission</string>
+    <string name="deny">Deny</string>
+    <string name="whatsapp_not_installed">WhatsApp is not installed</string>
+</resources>
