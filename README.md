@@ -92,6 +92,7 @@ This app was created to solve a simple but important problem: making it easier f
 
 ## 🏗️ Building from Source
 
+### Local Building
 See [BUILD_INSTRUCTIONS.md](BUILD_INSTRUCTIONS.md) for detailed build instructions including:
 - Setting up signing keys
 - Building signed APKs
@@ -102,6 +103,22 @@ Quick build commands:
 ./check_prerequisites.sh    # Check build environment
 ./generate_keystore.sh      # Create signing key (first time)
 ./build_signed_apk.sh       # Build signed APK
+```
+
+### Automated GitHub Releases
+This project includes automated building and releasing via GitHub Actions:
+- **Automatic releases** when you push version tags (e.g., `v1.0.0`)
+- **Manual releases** through GitHub Actions interface
+- **Both APK and AAB** formats generated automatically
+- **Signed releases** ready for distribution
+
+Setup instructions: [GITHUB_WORKFLOW_SETUP.md](GITHUB_WORKFLOW_SETUP.md)
+
+Quick release:
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+# GitHub will automatically build and create a release!
 ```
 
 ## 🔒 Privacy & Security

@@ -1,0 +1,203 @@
+name: Build and Release WhatsTap2
+
+on:
+  push:
+    tags:
+      - 'v*'  # Triggers on version tags like v1.0.0, v1.1.0, etc.
+  workflow_dispatch:  # Allows manual triggering
+    inputs:
+      version_name:
+        description: 'Version name (e.g., 1.0.0)'
+        required: true
+        default: '1.0.0'
+      version_code:
+        description: 'Version code (integer)'
+        required: true
+        default: '1'
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up JDK 17
+      uses: actions/setup-java@v4
+      with:
+        java-version: '17'
+        distribution: 'temurin'
+        
+    - name: Setup Android SDK
+      uses: android-actions/setup-android@v3
+      
+    - name: Cache Gradle packages
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.gradle/caches
+          ~/.gradle/wrapper
+        key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+        restore-keys: |
+          ${{ runner.os }}-gradle-
+          
+    - name: Make gradlew executable
+      run: chmod +x gradlew
+      
+    - name: Extract version from tag or input
+      id: version
+      run: |
+        if [ "${{ github.event_name }}" = "push" ]; then
+          # Extract version from tag (remove 'v' prefix)
+          VERSION_NAME=${GITHUB_REF#refs/tags/v}
+          VERSION_CODE=${{ github.run_number }}
+        else
+          # Use manual input
+          VERSION_NAME=${{ github.event.inputs.version_name }}
+          VERSION_CODE=${{ github.event.inputs.version_code }}
+        fi
+        echo "VERSION_NAME=$VERSION_NAME" >> $GITHUB_OUTPUT
+        echo "VERSION_CODE=$VERSION_CODE" >> $GITHUB_OUTPUT
+        echo "Building version: $VERSION_NAME ($VERSION_CODE)"
+        
+    - name: Create keystore from secret
+      run: |
+        echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > app/keystore.jks
+        
+    - name: Create keystore.properties
+      run: |
+        echo "storeFile=keystore.jks" > keystore.properties
+        echo "storePassword=${{ secrets.KEYSTORE_PASSWORD }}" >> keystore.properties
+        echo "keyAlias=${{ secrets.KEY_ALIAS }}" >> keystore.properties
+        echo "keyPassword=${{ secrets.KEY_PASSWORD }}" >> keystore.properties
+        
+    - name: Update version in build.gradle
+      run: |
+        sed -i "s/versionCode [0-9]*/versionCode ${{ steps.version.outputs.VERSION_CODE }}/" app/build.gradle
+        sed -i "s/versionName \".*\"/versionName \"${{ steps.version.outputs.VERSION_NAME }}\"/" app/build.gradle
+        
+    - name: Build Release APK
+      run: ./gradlew assembleRelease
+      
+    - name: Build Release AAB
+      run: ./gradlew bundleRelease
+      
+    - name: Sign APK
+      run: |
+        $ANDROID_HOME/build-tools/34.0.0/apksigner sign \
+          --ks app/keystore.jks \
+          --ks-key-alias ${{ secrets.KEY_ALIAS }} \
+          --ks-pass pass:${{ secrets.KEYSTORE_PASSWORD }} \
+          --key-pass pass:${{ secrets.KEY_PASSWORD }} \
+          --out app/build/outputs/apk/release/WhatsTap2-v${{ steps.version.outputs.VERSION_NAME }}-signed.apk \
+          app/build/outputs/apk/release/app-release-unsigned.apk
+          
+    - name: Sign AAB
+      run: |
+        jarsigner -verbose -sigalg SHA256withRSA -digestalg SHA-256 \
+          -keystore app/keystore.jks \
+          -storepass ${{ secrets.KEYSTORE_PASSWORD }} \
+          -keypass ${{ secrets.KEY_PASSWORD }} \
+          app/build/outputs/bundle/release/app-release.aab \
+          ${{ secrets.KEY_ALIAS }}
+          
+    - name: Verify APK signature
+      run: |
+        $ANDROID_HOME/build-tools/34.0.0/apksigner verify \
+          app/build/outputs/apk/release/WhatsTap2-v${{ steps.version.outputs.VERSION_NAME }}-signed.apk
+          
+    - name: Generate APK info
+      id: apk_info
+      run: |
+        APK_SIZE=$(du -h app/build/outputs/apk/release/WhatsTap2-v${{ steps.version.outputs.VERSION_NAME }}-signed.apk | cut -f1)
+        AAB_SIZE=$(du -h app/build/outputs/bundle/release/app-release.aab | cut -f1)
+        echo "APK_SIZE=$APK_SIZE" >> $GITHUB_OUTPUT
+        echo "AAB_SIZE=$AAB_SIZE" >> $GITHUB_OUTPUT
+        
+        # Get APK info if aapt is available
+        if command -v aapt &> /dev/null; then
+          APK_INFO=$(aapt dump badging app/build/outputs/apk/release/WhatsTap2-v${{ steps.version.outputs.VERSION_NAME }}-signed.apk | grep -E "(package|application-label|versionCode|versionName)" | head -4)
+          echo "APK_INFO<<EOF" >> $GITHUB_OUTPUT
+          echo "$APK_INFO" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+        fi
+        
+    - name: Create Release
+      id: create_release
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: ${{ github.ref_name || format('v{0}', steps.version.outputs.VERSION_NAME) }}
+        release_name: WhatsTap2 v${{ steps.version.outputs.VERSION_NAME }}
+        body: |
+          ## WhatsTap2 v${{ steps.version.outputs.VERSION_NAME }}
+          
+          **A Simple Contact Launcher for Grandparents** 📱❤️
+          
+          ### 📦 Downloads
+          - **APK**: For direct installation on Android devices
+          - **AAB**: For Google Play Store distribution
+          
+          ### 📊 Build Information
+          - **Version**: ${{ steps.version.outputs.VERSION_NAME }} (Build ${{ steps.version.outputs.VERSION_CODE }})
+          - **APK Size**: ${{ steps.apk_info.outputs.APK_SIZE }}
+          - **AAB Size**: ${{ steps.apk_info.outputs.AAB_SIZE }}
+          - **Built**: ${{ github.run_number }} on ${{ github.sha }}
+          
+          ### 🚀 Installation Instructions
+          
+          #### For Direct Installation (APK)
+          1. Download the APK file below
+          2. Enable "Install from unknown sources" in Android settings
+          3. Install the APK on your device
+          4. Grant required permissions when prompted
+          
+          #### For Google Play Store (AAB)
+          - Use the AAB file for uploading to Google Play Console
+          
+          ### 🔧 Setup Instructions
+          1. **Star Important Contacts**: In the phone's contacts app, star (⭐) family members
+          2. **Add WhatsApp Labels**: For WhatsApp contacts, add "WhatsApp" in the phone number label
+          3. **Sync Contacts**: Open WhatsTap2 and tap the sync button (🔄)
+          4. **Start Calling**: Tap contact photos to call them easily!
+          
+          ### 🎯 Features
+          - ✅ One-tap calling for starred contacts
+          - ✅ Automatic WhatsApp video call detection
+          - ✅ Large, senior-friendly interface
+          - ✅ Duplicate contact prevention
+          - ✅ Smart phone number matching
+          
+          ---
+          
+          **Made with ❤️ for keeping families connected**
+        draft: false
+        prerelease: false
+        
+    - name: Upload APK to Release
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: app/build/outputs/apk/release/WhatsTap2-v${{ steps.version.outputs.VERSION_NAME }}-signed.apk
+        asset_name: WhatsTap2-v${{ steps.version.outputs.VERSION_NAME }}.apk
+        asset_content_type: application/vnd.android.package-archive
+        
+    - name: Upload AAB to Release
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: app/build/outputs/bundle/release/app-release.aab
+        asset_name: WhatsTap2-v${{ steps.version.outputs.VERSION_NAME }}.aab
+        asset_content_type: application/octet-stream
+        
+    - name: Clean up keystore
+      if: always()
+      run: |
+        rm -f app/keystore.jks
+        rm -f keystore.properties 

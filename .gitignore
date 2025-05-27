@@ -163,6 +163,9 @@ keystore.properties
 *-signed.apk
 whatstap2-release-key.keystore
 
+# GitHub workflow temporary files
+app/keystore.jks
+
 # Google Services (e.g. APIs or Firebase)
 google-services.json
 
