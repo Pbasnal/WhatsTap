@@ -86,6 +86,7 @@ class MainActivity : ComponentActivity() {
             putExtra("contact_id", contact.id)
             putExtra("contact_name", contact.name)
             putExtra("contact_number", contact.phoneNumber)
+            putExtra("contact_label", contact.phoneLabel)
             contact.photoUri?.let { uriString ->
                 // Only grant URI permission for non-contact URIs
                 val uri = Uri.parse(uriString)
@@ -152,7 +153,9 @@ class MainActivity : ComponentActivity() {
             ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME,
             ContactsContract.CommonDataKinds.Phone.NUMBER,
             ContactsContract.CommonDataKinds.Phone.PHOTO_URI,
-            ContactsContract.CommonDataKinds.Phone.STARRED
+            ContactsContract.CommonDataKinds.Phone.STARRED,
+            ContactsContract.CommonDataKinds.Phone.TYPE,
+            ContactsContract.CommonDataKinds.Phone.LABEL
         )
 
         val selection = "${ContactsContract.CommonDataKinds.Phone.STARRED} = ?"
@@ -173,17 +176,23 @@ class MainActivity : ComponentActivity() {
                     val name = cursor.getString(cursor.getColumnIndexOrThrow(ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME))
                     val number = cursor.getString(cursor.getColumnIndexOrThrow(ContactsContract.CommonDataKinds.Phone.NUMBER))
                     val photoUri = cursor.getString(cursor.getColumnIndexOrThrow(ContactsContract.CommonDataKinds.Phone.PHOTO_URI))
+                    val type = cursor.getInt(cursor.getColumnIndexOrThrow(ContactsContract.CommonDataKinds.Phone.TYPE))
+                    val customLabel = cursor.getString(cursor.getColumnIndexOrThrow(ContactsContract.CommonDataKinds.Phone.LABEL))
+
+                    // Get the phone label based on type or custom label
+                    val phoneLabel = getPhoneTypeLabel(type, customLabel)
 
                     // Create contact with Room auto-generated ID (0) but store system ID for reference
                     val contact = Contact(
                         id = 0, // Let Room auto-generate
                         name = name ?: "Unknown",
                         phoneNumber = number ?: "",
+                        phoneLabel = phoneLabel,
                         photoUri = photoUri
                     )
                     
                     contacts.add(contact)
-                    android.util.Log.d("MainActivity", "Added starred contact: ${contact.name} - ${contact.phoneNumber}")
+                    android.util.Log.d("MainActivity", "Added starred contact: ${contact.name} - ${contact.phoneNumber} (${phoneLabel})")
                 }
             }
 
@@ -231,6 +240,25 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch(Dispatchers.IO) {
             // Force sync regardless of existing contacts
             loadStarredContactsFromSystem()
+        }
+    }
+
+    private fun getPhoneTypeLabel(type: Int, customLabel: String?): String {
+        return when (type) {
+            ContactsContract.CommonDataKinds.Phone.TYPE_HOME -> "Home"
+            ContactsContract.CommonDataKinds.Phone.TYPE_MOBILE -> "Mobile"
+            ContactsContract.CommonDataKinds.Phone.TYPE_WORK -> "Work"
+            ContactsContract.CommonDataKinds.Phone.TYPE_FAX_WORK -> "Work Fax"
+            ContactsContract.CommonDataKinds.Phone.TYPE_FAX_HOME -> "Home Fax"
+            ContactsContract.CommonDataKinds.Phone.TYPE_PAGER -> "Pager"
+            ContactsContract.CommonDataKinds.Phone.TYPE_OTHER -> "Other"
+            ContactsContract.CommonDataKinds.Phone.TYPE_MAIN -> "Main"
+            ContactsContract.CommonDataKinds.Phone.TYPE_WORK_MOBILE -> "Work Mobile"
+            ContactsContract.CommonDataKinds.Phone.TYPE_WORK_PAGER -> "Work Pager"
+            ContactsContract.CommonDataKinds.Phone.TYPE_ASSISTANT -> "Assistant"
+            ContactsContract.CommonDataKinds.Phone.TYPE_MMS -> "MMS"
+            ContactsContract.CommonDataKinds.Phone.TYPE_CUSTOM -> customLabel ?: "Custom"
+            else -> "Phone"
         }
     }
 
@@ -382,6 +410,21 @@ fun ContactItem(
                     textAlign = TextAlign.Center,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                
+                // Phone label below the number (if available)
+                contact.phoneLabel?.let { label ->
+                    Text(
+                        text = label,
+                        style = MaterialTheme.typography.labelSmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 4.dp),
+                        textAlign = TextAlign.Center,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
             }
             
             // Edit button positioned at top-right corner

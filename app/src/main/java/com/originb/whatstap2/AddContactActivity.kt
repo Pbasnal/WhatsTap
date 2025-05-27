@@ -24,6 +24,7 @@ class AddContactActivity : AppCompatActivity() {
     private val viewModel: ContactViewModel by viewModels()
     private var selectedPhotoUri: String? = null
     private var editingContactId: Long? = null
+    private var phoneLabel: String? = null
 
     private val pickImage = registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         uri?.let {
@@ -89,7 +90,9 @@ class AddContactActivity : AppCompatActivity() {
             val projection = arrayOf(
                 ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME,
                 ContactsContract.CommonDataKinds.Phone.NUMBER,
-                ContactsContract.CommonDataKinds.Photo.PHOTO_URI
+                ContactsContract.CommonDataKinds.Photo.PHOTO_URI,
+                ContactsContract.CommonDataKinds.Phone.TYPE,
+                ContactsContract.CommonDataKinds.Phone.LABEL
             )
 
             contentResolver.query(
@@ -103,10 +106,17 @@ class AddContactActivity : AppCompatActivity() {
                     val nameIndex = cursor.getColumnIndex(ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME)
                     val numberIndex = cursor.getColumnIndex(ContactsContract.CommonDataKinds.Phone.NUMBER)
                     val photoIndex = cursor.getColumnIndex(ContactsContract.CommonDataKinds.Photo.PHOTO_URI)
+                    val typeIndex = cursor.getColumnIndex(ContactsContract.CommonDataKinds.Phone.TYPE)
+                    val labelIndex = cursor.getColumnIndex(ContactsContract.CommonDataKinds.Phone.LABEL)
 
                     val name = if (nameIndex != -1) cursor.getString(nameIndex) else ""
                     val number = if (numberIndex != -1) cursor.getString(numberIndex) else ""
                     val photoUri = if (photoIndex != -1) cursor.getString(photoIndex) else null
+                    val type = if (typeIndex != -1) cursor.getInt(typeIndex) else ContactsContract.CommonDataKinds.Phone.TYPE_OTHER
+                    val customLabel = if (labelIndex != -1) cursor.getString(labelIndex) else null
+
+                    // Get the phone label based on type or custom label
+                    phoneLabel = getPhoneTypeLabel(type, customLabel)
 
                     binding.nameInput.setText(name)
                     binding.phoneInput.setText(number)
@@ -135,6 +145,7 @@ class AddContactActivity : AppCompatActivity() {
             val name = intent.getStringExtra("contact_name")
             val number = intent.getStringExtra("contact_number")
             val photoUriString = intent.getStringExtra("contact_photo")
+            phoneLabel = intent.getStringExtra("contact_label")
 
             binding.nameInput.setText(name)
             binding.phoneInput.setText(number)
@@ -205,6 +216,25 @@ class AddContactActivity : AppCompatActivity() {
         pickImage.launch("image/*")
     }
 
+    private fun getPhoneTypeLabel(type: Int, customLabel: String?): String {
+        return when (type) {
+            ContactsContract.CommonDataKinds.Phone.TYPE_HOME -> "Home"
+            ContactsContract.CommonDataKinds.Phone.TYPE_MOBILE -> "Mobile"
+            ContactsContract.CommonDataKinds.Phone.TYPE_WORK -> "Work"
+            ContactsContract.CommonDataKinds.Phone.TYPE_FAX_WORK -> "Work Fax"
+            ContactsContract.CommonDataKinds.Phone.TYPE_FAX_HOME -> "Home Fax"
+            ContactsContract.CommonDataKinds.Phone.TYPE_PAGER -> "Pager"
+            ContactsContract.CommonDataKinds.Phone.TYPE_OTHER -> "Other"
+            ContactsContract.CommonDataKinds.Phone.TYPE_MAIN -> "Main"
+            ContactsContract.CommonDataKinds.Phone.TYPE_WORK_MOBILE -> "Work Mobile"
+            ContactsContract.CommonDataKinds.Phone.TYPE_WORK_PAGER -> "Work Pager"
+            ContactsContract.CommonDataKinds.Phone.TYPE_ASSISTANT -> "Assistant"
+            ContactsContract.CommonDataKinds.Phone.TYPE_MMS -> "MMS"
+            ContactsContract.CommonDataKinds.Phone.TYPE_CUSTOM -> customLabel ?: "Custom"
+            else -> "Phone"
+        }
+    }
+
     private fun saveContact() {
         val name = binding.nameInput.text.toString()
         val phoneNumber = binding.phoneInput.text.toString()
@@ -223,6 +253,7 @@ class AddContactActivity : AppCompatActivity() {
                 id = editingContactId!!,
                 name = name,
                 phoneNumber = phoneNumber,
+                phoneLabel = phoneLabel,
                 photoUri = selectedPhotoUri
             )
         } else {
@@ -231,6 +262,7 @@ class AddContactActivity : AppCompatActivity() {
                 id = 0, // Room will auto-generate this
                 name = name,
                 phoneNumber = phoneNumber,
+                phoneLabel = phoneLabel,
                 photoUri = selectedPhotoUri
             )
         }
