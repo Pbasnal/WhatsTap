@@ -71,7 +71,7 @@ class MainActivity : ComponentActivity() {
                         viewModel = viewModel,
                         onAddContact = { startActivity(Intent(this, AddContactActivity::class.java)) },
                         onEditContact = { contact -> editContact(contact) },
-                        onContactClick = { contact -> openWhatsApp(contact.phoneNumber) },
+                        onContactClick = { contact -> handleContactCall(contact) },
                         onSyncContacts = { syncStarredContacts() }
                     )
                 }
@@ -104,7 +104,8 @@ class MainActivity : ComponentActivity() {
             Manifest.permission.READ_CONTACTS,
             Manifest.permission.WRITE_CONTACTS,
             Manifest.permission.READ_EXTERNAL_STORAGE,
-            Manifest.permission.WRITE_EXTERNAL_STORAGE
+            Manifest.permission.WRITE_EXTERNAL_STORAGE,
+            Manifest.permission.CALL_PHONE
         )
 
         if (permissions.all { ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED }) {
@@ -257,7 +258,15 @@ class MainActivity : ComponentActivity() {
             ContactsContract.CommonDataKinds.Phone.TYPE_WORK_PAGER -> "Work Pager"
             ContactsContract.CommonDataKinds.Phone.TYPE_ASSISTANT -> "Assistant"
             ContactsContract.CommonDataKinds.Phone.TYPE_MMS -> "MMS"
-            ContactsContract.CommonDataKinds.Phone.TYPE_CUSTOM -> customLabel ?: "Custom"
+            ContactsContract.CommonDataKinds.Phone.TYPE_CUSTOM -> {
+                // Check if custom label contains WhatsApp-related terms
+                val label = customLabel?.lowercase() ?: "custom"
+                if (label.contains("whatsapp") || label.contains("wa")) {
+                    customLabel ?: "WhatsApp"
+                } else {
+                    customLabel ?: "Custom"
+                }
+            }
             else -> "Phone"
         }
     }
@@ -271,6 +280,374 @@ class MainActivity : ComponentActivity() {
             startActivity(intent)
         } catch (e: Exception) {
             Toast.makeText(this, R.string.whatsapp_not_installed, Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun handleContactCall(contact: Contact) {
+        val phoneLabel = contact.phoneLabel?.lowercase() ?: ""
+        
+        if (phoneLabel.contains("whatsapp") || phoneLabel.contains("wa")) {
+            // Check if WhatsApp is installed first
+            if (!isWhatsAppInstalled()) {
+                Toast.makeText(this, "WhatsApp not installed, making regular call", Toast.LENGTH_SHORT).show()
+                makeVoiceCall(contact.phoneNumber)
+                return
+            }
+            
+            // Show the formatted number for debugging
+            val formattedNumber = formatPhoneNumberForWhatsApp(contact.phoneNumber)
+            android.util.Log.d("MainActivity", "Opening WhatsApp for: ${contact.name}")
+            android.util.Log.d("MainActivity", "Original: ${contact.phoneNumber}, Formatted: $formattedNumber")
+            
+            // WhatsApp doesn't allow direct video call triggering from third-party apps
+            // Open WhatsApp chat and provide clear instructions
+            if (!tryWhatsAppChat(contact.phoneNumber)) {
+                // If WhatsApp chat fails, fallback to normal call
+                Toast.makeText(this, "WhatsApp not available, making regular call", Toast.LENGTH_SHORT).show()
+                makeVoiceCall(contact.phoneNumber)
+            } else {
+                // Show a more helpful message with specific instructions
+                showWhatsAppCallInstructions(contact.name)
+            }
+        } else {
+            // Trigger normal voice call
+            makeVoiceCall(contact.phoneNumber)
+        }
+    }
+
+    private fun showWhatsAppCallInstructions(contactName: String) {
+        // Create a more informative dialog instead of just a toast
+        androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle("WhatsApp Video Call")
+            .setMessage("WhatsApp chat with $contactName is now open.\n\nTo start a video call:\n• Tap the video call button (📹) at the top\n• Or tap the phone icon (📞) for voice call")
+            .setPositiveButton("Got it") { dialog, _ -> dialog.dismiss() }
+            .setIcon(android.R.drawable.ic_dialog_info)
+            .show()
+    }
+
+    private fun isWhatsAppInstalled(): Boolean {
+        return try {
+            packageManager.getPackageInfo("com.whatsapp", 0)
+            true
+        } catch (e: PackageManager.NameNotFoundException) {
+            try {
+                packageManager.getPackageInfo("com.whatsapp.w4b", 0)
+                true
+            } catch (e: PackageManager.NameNotFoundException) {
+                false
+            }
+        }
+    }
+
+    private fun formatPhoneNumberForWhatsApp(phoneNumber: String): String {
+        // Remove all non-digit characters except +
+        var cleanNumber = phoneNumber.replace(Regex("[^+\\d]"), "")
+        
+        // Remove + if present and handle it separately
+        val hasPlus = cleanNumber.startsWith("+")
+        if (hasPlus) {
+            cleanNumber = cleanNumber.substring(1)
+        }
+        
+        // Only keep digits now
+        cleanNumber = cleanNumber.filter { it.isDigit() }
+        
+        android.util.Log.d("MainActivity", "Formatting: '$phoneNumber' -> '$cleanNumber' (had +: $hasPlus)")
+        
+        // If number is too short, return as-is
+        if (cleanNumber.length < 7) {
+            android.util.Log.w("MainActivity", "Number too short: $cleanNumber")
+            return cleanNumber
+        }
+        
+        // If the number doesn't start with a country code, try to add one
+        return if (cleanNumber.isNotEmpty()) {
+            when {
+                // If it already had a + or looks like it has a country code, use as-is
+                hasPlus || cleanNumber.length > 11 -> {
+                    cleanNumber
+                }
+                
+                // Common country code patterns (more conservative)
+                cleanNumber.startsWith("1") && cleanNumber.length == 11 -> cleanNumber // US/Canada
+                cleanNumber.startsWith("91") && cleanNumber.length == 12 -> cleanNumber // India
+                cleanNumber.startsWith("44") && cleanNumber.length >= 11 -> cleanNumber // UK
+                cleanNumber.startsWith("49") && cleanNumber.length >= 11 -> cleanNumber // Germany
+                cleanNumber.startsWith("33") && cleanNumber.length >= 10 -> cleanNumber // France
+                cleanNumber.startsWith("39") && cleanNumber.length >= 10 -> cleanNumber // Italy
+                cleanNumber.startsWith("81") && cleanNumber.length >= 10 -> cleanNumber // Japan
+                cleanNumber.startsWith("86") && cleanNumber.length >= 11 -> cleanNumber // China
+                
+                // US/Canada number without country code (10 digits, doesn't start with 0 or 1)
+                cleanNumber.length == 10 && cleanNumber[0] in '2'..'9' -> {
+                    "1$cleanNumber"
+                }
+                
+                // India number without country code (10 digits starting with 6-9)
+                cleanNumber.length == 10 && cleanNumber[0] in '6'..'9' -> {
+                    "91$cleanNumber"
+                }
+                
+                // UK number without country code (starts with 0, remove 0 and add 44)
+                cleanNumber.startsWith("0") && cleanNumber.length >= 10 -> {
+                    "44${cleanNumber.substring(1)}"
+                }
+                
+                // For other cases, if it looks like it might already have a country code, use as-is
+                cleanNumber.length >= 10 -> {
+                    cleanNumber
+                }
+                
+                // Too short, return as-is
+                else -> {
+                    android.util.Log.w("MainActivity", "Unclear format for number: $cleanNumber")
+                    cleanNumber
+                }
+            }
+        } else {
+            ""
+        }
+    }
+
+    private fun tryWhatsAppDirectCall(phoneNumber: String): Boolean {
+        return try {
+            val formattedNumber = formatPhoneNumberForWhatsApp(phoneNumber)
+            android.util.Log.d("MainActivity", "Trying WhatsApp direct call with number: $formattedNumber")
+            
+            // Try various direct call methods
+            val callIntents = listOf(
+                // Method 1: WhatsApp call intent (most direct)
+                Intent().apply {
+                    action = Intent.ACTION_VIEW
+                    data = Uri.parse("whatsapp://call?phone=$formattedNumber")
+                    setPackage("com.whatsapp")
+                },
+                // Method 2: WhatsApp video call intent
+                Intent().apply {
+                    action = Intent.ACTION_VIEW
+                    data = Uri.parse("whatsapp://videocall?phone=$formattedNumber")
+                    setPackage("com.whatsapp")
+                },
+                // Method 3: WhatsApp internal call action
+                Intent().apply {
+                    action = "android.intent.action.CALL"
+                    data = Uri.parse("whatsapp://call/$formattedNumber")
+                    setPackage("com.whatsapp")
+                },
+                // Method 4: Direct JID call (WhatsApp internal)
+                Intent().apply {
+                    action = "com.whatsapp.intent.action.CALL"
+                    putExtra("jid", "$formattedNumber@s.whatsapp.net")
+                    putExtra("video", true)
+                    setPackage("com.whatsapp")
+                },
+                // Method 5: WhatsApp contact with call action
+                Intent().apply {
+                    action = Intent.ACTION_CALL
+                    data = Uri.parse("whatsapp://contact/$formattedNumber")
+                    setPackage("com.whatsapp")
+                },
+                // Method 6: Try with wa.me but with call parameter
+                Intent().apply {
+                    action = Intent.ACTION_VIEW
+                    data = Uri.parse("https://wa.me/$formattedNumber?action=call")
+                    setPackage("com.whatsapp")
+                },
+                // Method 6b: Try wa.me with video call parameter
+                Intent().apply {
+                    action = Intent.ACTION_VIEW
+                    data = Uri.parse("https://wa.me/$formattedNumber?call=video")
+                    setPackage("com.whatsapp")
+                },
+                // Method 6c: Try wa.me with call type
+                Intent().apply {
+                    action = Intent.ACTION_VIEW
+                    data = Uri.parse("https://wa.me/$formattedNumber?type=video_call")
+                    setPackage("com.whatsapp")
+                },
+                // Method 7: WhatsApp with tel: scheme
+                Intent().apply {
+                    action = Intent.ACTION_CALL
+                    data = Uri.parse("tel:whatsapp:$formattedNumber")
+                    setPackage("com.whatsapp")
+                },
+                // Method 8: Try opening WhatsApp with specific call activity
+                Intent().apply {
+                    setClassName("com.whatsapp", "com.whatsapp.voipcalling.VoipCallingActivity")
+                    putExtra("jid", "$formattedNumber@s.whatsapp.net")
+                    putExtra("video_call", true)
+                },
+                // Method 9: Try WhatsApp's main activity with call extras
+                Intent().apply {
+                    setClassName("com.whatsapp", "com.whatsapp.Main")
+                    putExtra("jid", "$formattedNumber@s.whatsapp.net")
+                    putExtra("call_type", "video")
+                    action = Intent.ACTION_VIEW
+                },
+                // Method 10: Try using Android's call intent with WhatsApp scheme
+                Intent().apply {
+                    action = Intent.ACTION_CALL
+                    data = Uri.parse("whatsapp:$formattedNumber")
+                    setPackage("com.whatsapp")
+                },
+                // Method 11: Try WhatsApp protocol with video parameter
+                Intent().apply {
+                    action = Intent.ACTION_VIEW
+                    data = Uri.parse("whatsapp://video/$formattedNumber")
+                    setPackage("com.whatsapp")
+                }
+            )
+            
+            for ((index, intent) in callIntents.withIndex()) {
+                try {
+                    android.util.Log.d("MainActivity", "Trying call method ${index + 1}: ${intent.action} - ${intent.data}")
+                    
+                    // Check if the intent can be resolved
+                    val resolveInfo = packageManager.resolveActivity(intent, 0)
+                    if (resolveInfo != null) {
+                        startActivity(intent)
+                        android.util.Log.d("MainActivity", "WhatsApp call intent succeeded: ${intent.data}")
+                        return true
+                    } else {
+                        android.util.Log.d("MainActivity", "WhatsApp call intent cannot be resolved: ${intent.data}")
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.w("MainActivity", "WhatsApp call intent failed: ${intent.data}", e)
+                    continue
+                }
+            }
+            
+            android.util.Log.w("MainActivity", "All WhatsApp call intents failed for number: $formattedNumber")
+            false
+        } catch (e: Exception) {
+            android.util.Log.e("MainActivity", "Error in tryWhatsAppDirectCall", e)
+            false
+        }
+    }
+
+    private fun tryWhatsAppVideoCall(phoneNumber: String): Boolean {
+        return try {
+            val formattedNumber = formatPhoneNumberForWhatsApp(phoneNumber)
+            android.util.Log.d("MainActivity", "Trying WhatsApp video call with number: $formattedNumber")
+            
+            // Try multiple WhatsApp video call approaches
+            val videoCallIntents = listOf(
+                // Method 1: Direct video call intent (newer WhatsApp versions)
+                Intent().apply {
+                    action = "android.intent.action.VIEW"
+                    setPackage("com.whatsapp")
+                    data = Uri.parse("whatsapp://video_call?phone=$formattedNumber")
+                },
+                // Method 2: WhatsApp call intent with video flag
+                Intent().apply {
+                    action = "android.intent.action.VIEW"
+                    setPackage("com.whatsapp")
+                    data = Uri.parse("whatsapp://call?phone=$formattedNumber&video=true")
+                },
+                // Method 3: Internal WhatsApp video call intent
+                Intent().apply {
+                    action = "com.whatsapp.intent.action.CALL"
+                    setPackage("com.whatsapp")
+                    putExtra("jid", "$formattedNumber@s.whatsapp.net")
+                    putExtra("video", true)
+                },
+                // Method 4: WhatsApp contact intent with call extra
+                Intent().apply {
+                    action = Intent.ACTION_VIEW
+                    setPackage("com.whatsapp")
+                    data = Uri.parse("whatsapp://send?phone=$formattedNumber")
+                    putExtra("call_type", "video")
+                    putExtra("video_call", true)
+                }
+            )
+            
+            for (intent in videoCallIntents) {
+                try {
+                    if (intent.resolveActivity(packageManager) != null) {
+                        startActivity(intent)
+                        android.util.Log.d("MainActivity", "WhatsApp video call intent succeeded: ${intent.data}")
+                        return true
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.d("MainActivity", "WhatsApp video call intent failed: ${intent.data}", e)
+                    continue
+                }
+            }
+            false
+        } catch (e: Exception) {
+            android.util.Log.e("MainActivity", "All WhatsApp video call attempts failed", e)
+            false
+        }
+    }
+
+    private fun tryWhatsAppChat(phoneNumber: String): Boolean {
+        return try {
+            val formattedNumber = formatPhoneNumberForWhatsApp(phoneNumber)
+            android.util.Log.d("MainActivity", "Opening WhatsApp chat with number: $formattedNumber")
+            
+            // Use only the most reliable WhatsApp methods
+            val whatsappIntents = listOf(
+                // Method 1: Standard wa.me link (most reliable)
+                Intent(Intent.ACTION_VIEW).apply {
+                    data = Uri.parse("https://wa.me/$formattedNumber")
+                    setPackage("com.whatsapp")
+                },
+                // Method 2: WhatsApp protocol with send
+                Intent(Intent.ACTION_VIEW).apply {
+                    data = Uri.parse("whatsapp://send?phone=$formattedNumber")
+                    setPackage("com.whatsapp")
+                },
+                // Method 3: Try WhatsApp Business if regular WhatsApp fails
+                Intent(Intent.ACTION_VIEW).apply {
+                    data = Uri.parse("https://wa.me/$formattedNumber")
+                    setPackage("com.whatsapp.w4b")
+                }
+            )
+            
+            for ((index, intent) in whatsappIntents.withIndex()) {
+                try {
+                    android.util.Log.d("MainActivity", "Trying WhatsApp method ${index + 1}: ${intent.data}")
+                    
+                    // Check if the intent can be resolved
+                    val resolveInfo = packageManager.resolveActivity(intent, 0)
+                    if (resolveInfo != null) {
+                        startActivity(intent)
+                        android.util.Log.d("MainActivity", "WhatsApp chat opened successfully: ${intent.data}")
+                        return true
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.w("MainActivity", "WhatsApp intent failed: ${intent.data}", e)
+                    continue
+                }
+            }
+            
+            android.util.Log.w("MainActivity", "All WhatsApp intents failed for number: $formattedNumber")
+            false
+        } catch (e: Exception) {
+            android.util.Log.e("MainActivity", "Error opening WhatsApp chat", e)
+            false
+        }
+    }
+
+    private fun makeVoiceCall(phoneNumber: String) {
+        try {
+            val intent = Intent(Intent.ACTION_CALL).apply {
+                data = Uri.parse("tel:$phoneNumber")
+            }
+            
+            // Check if we have CALL_PHONE permission
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.CALL_PHONE) 
+                == PackageManager.PERMISSION_GRANTED) {
+                startActivity(intent)
+            } else {
+                // Request permission or use ACTION_DIAL instead
+                val dialIntent = Intent(Intent.ACTION_DIAL).apply {
+                    data = Uri.parse("tel:$phoneNumber")
+                }
+                startActivity(dialIntent)
+            }
+        } catch (e: Exception) {
+            Toast.makeText(this, "Failed to make call", Toast.LENGTH_SHORT).show()
         }
     }
 

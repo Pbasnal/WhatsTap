@@ -230,7 +230,15 @@ class AddContactActivity : AppCompatActivity() {
             ContactsContract.CommonDataKinds.Phone.TYPE_WORK_PAGER -> "Work Pager"
             ContactsContract.CommonDataKinds.Phone.TYPE_ASSISTANT -> "Assistant"
             ContactsContract.CommonDataKinds.Phone.TYPE_MMS -> "MMS"
-            ContactsContract.CommonDataKinds.Phone.TYPE_CUSTOM -> customLabel ?: "Custom"
+            ContactsContract.CommonDataKinds.Phone.TYPE_CUSTOM -> {
+                // Check if custom label contains WhatsApp-related terms
+                val label = customLabel?.lowercase() ?: "custom"
+                if (label.contains("whatsapp") || label.contains("wa")) {
+                    customLabel ?: "WhatsApp"
+                } else {
+                    customLabel ?: "Custom"
+                }
+            }
             else -> "Phone"
         }
     }
