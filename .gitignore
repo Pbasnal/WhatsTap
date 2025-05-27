@@ -158,6 +158,11 @@ lint/tmp/
 *.jks
 *.keystore
 
+# Signing files (added for build scripts)
+keystore.properties
+*-signed.apk
+whatstap2-release-key.keystore
+
 # Google Services (e.g. APIs or Firebase)
 google-services.json
 
