@@ -38,4 +38,12 @@ class ContactViewModel(application: Application) : AndroidViewModel(application)
     suspend fun getContactById(id: Long): Contact? {
         return contactDao.getContactById(id)
     }
+    
+    suspend fun getAllContactsSync(): List<Contact> {
+        return contactDao.getAllContactsSync()
+    }
+    
+    suspend fun insertSync(contact: Contact): Long {
+        return contactDao.insert(contact)
+    }
 } 

@@ -20,4 +20,7 @@ interface ContactDao {
 
     @Query("SELECT * FROM contacts WHERE id = :id")
     suspend fun getContactById(id: Long): Contact?
+    
+    @Query("SELECT * FROM contacts ORDER BY name ASC")
+    suspend fun getAllContactsSync(): List<Contact>
 } 

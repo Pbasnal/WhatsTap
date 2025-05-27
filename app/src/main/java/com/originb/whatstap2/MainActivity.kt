@@ -19,6 +19,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.livedata.observeAsState
@@ -35,6 +36,7 @@ import coil.compose.AsyncImage
 import com.originb.whatstap2.model.Contact
 import com.originb.whatstap2.viewmodel.ContactViewModel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
 
 class MainActivity : ComponentActivity() {
     private val viewModel: ContactViewModel by viewModels()
@@ -43,6 +45,7 @@ class MainActivity : ComponentActivity() {
         ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
         if (permissions.all { it.value }) {
+            checkStarredContactsInSystem()
             loadFavoriteContacts()
         } else {
             showPermissionDialog()
@@ -61,7 +64,8 @@ class MainActivity : ComponentActivity() {
                         viewModel = viewModel,
                         onAddContact = { startActivity(Intent(this, AddContactActivity::class.java)) },
                         onEditContact = { contact -> editContact(contact) },
-                        onContactClick = { contact -> openWhatsApp(contact.phoneNumber) }
+                        onContactClick = { contact -> openWhatsApp(contact.phoneNumber) },
+                        onSyncContacts = { syncStarredContacts() }
                     )
                 }
             }
@@ -96,6 +100,7 @@ class MainActivity : ComponentActivity() {
         )
 
         if (permissions.all { ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED }) {
+            checkStarredContactsInSystem()
             loadFavoriteContacts()
         } else {
             requestPermissionLauncher.launch(permissions)
@@ -119,10 +124,107 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun loadFavoriteContacts() {
-        // This method loads starred contacts from system contacts
-        // You might want to call this only once or when you specifically want to sync
-        // For now, let's just ensure the contacts list is displayed properly
-        // The starred contacts loading can be moved to a separate sync function
+        android.util.Log.d("MainActivity", "Loading favorite contacts from system...")
+        
+        lifecycleScope.launch(Dispatchers.IO) {
+            // First check if we already have contacts in the database
+            val existingContacts = viewModel.getAllContactsSync()
+            android.util.Log.d("MainActivity", "Existing contacts in database: ${existingContacts.size}")
+            
+            // Only load from system if database is empty or we want to sync
+            if (existingContacts.isEmpty()) {
+                loadStarredContactsFromSystem()
+            }
+        }
+    }
+    
+    private suspend fun loadStarredContactsFromSystem() {
+        val contacts = mutableListOf<Contact>()
+        val projection = arrayOf(
+            ContactsContract.CommonDataKinds.Phone.CONTACT_ID,
+            ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME,
+            ContactsContract.CommonDataKinds.Phone.NUMBER,
+            ContactsContract.CommonDataKinds.Phone.PHOTO_URI,
+            ContactsContract.CommonDataKinds.Phone.STARRED
+        )
+
+        val selection = "${ContactsContract.CommonDataKinds.Phone.STARRED} = ?"
+        val selectionArgs = arrayOf("1")
+
+        try {
+            contentResolver.query(
+                ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
+                projection,
+                selection,
+                selectionArgs,
+                ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME
+            )?.use { cursor ->
+                android.util.Log.d("MainActivity", "Found ${cursor.count} starred contacts in system")
+                
+                while (cursor.moveToNext()) {
+                    val systemContactId = cursor.getLong(cursor.getColumnIndexOrThrow(ContactsContract.CommonDataKinds.Phone.CONTACT_ID))
+                    val name = cursor.getString(cursor.getColumnIndexOrThrow(ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME))
+                    val number = cursor.getString(cursor.getColumnIndexOrThrow(ContactsContract.CommonDataKinds.Phone.NUMBER))
+                    val photoUri = cursor.getString(cursor.getColumnIndexOrThrow(ContactsContract.CommonDataKinds.Phone.PHOTO_URI))
+
+                    // Create contact with Room auto-generated ID (0) but store system ID for reference
+                    val contact = Contact(
+                        id = 0, // Let Room auto-generate
+                        name = name ?: "Unknown",
+                        phoneNumber = number ?: "",
+                        photoUri = photoUri
+                    )
+                    
+                    contacts.add(contact)
+                    android.util.Log.d("MainActivity", "Added starred contact: ${contact.name} - ${contact.phoneNumber}")
+                }
+            }
+
+            // Insert all contacts into Room database
+            contacts.forEach { contact ->
+                val insertedId = viewModel.insertSync(contact)
+                android.util.Log.d("MainActivity", "Inserted contact ${contact.name} with ID: $insertedId")
+            }
+            
+            android.util.Log.d("MainActivity", "Finished loading ${contacts.size} starred contacts")
+            
+        } catch (e: Exception) {
+            android.util.Log.e("MainActivity", "Error loading starred contacts", e)
+        }
+    }
+    
+    // Method to check if there are any starred contacts in the system
+    private fun checkStarredContactsInSystem() {
+        lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                val projection = arrayOf(ContactsContract.CommonDataKinds.Phone.CONTACT_ID)
+                val selection = "${ContactsContract.CommonDataKinds.Phone.STARRED} = ?"
+                val selectionArgs = arrayOf("1")
+
+                contentResolver.query(
+                    ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
+                    projection,
+                    selection,
+                    selectionArgs,
+                    null
+                )?.use { cursor ->
+                    android.util.Log.d("MainActivity", "Total starred contacts in system: ${cursor.count}")
+                    if (cursor.count == 0) {
+                        android.util.Log.w("MainActivity", "No starred contacts found in system. Please star some contacts first.")
+                    }
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("MainActivity", "Error checking starred contacts", e)
+            }
+        }
+    }
+    
+    private fun syncStarredContacts() {
+        android.util.Log.d("MainActivity", "Manual sync of starred contacts requested")
+        lifecycleScope.launch(Dispatchers.IO) {
+            // Force sync regardless of existing contacts
+            loadStarredContactsFromSystem()
+        }
     }
 
     private fun openWhatsApp(phoneNumber: String) {
@@ -149,7 +251,8 @@ fun MainScreen(
     viewModel: ContactViewModel,
     onAddContact: () -> Unit,
     onEditContact: (Contact) -> Unit,
-    onContactClick: (Contact) -> Unit
+    onContactClick: (Contact) -> Unit,
+    onSyncContacts: () -> Unit
 ) {
     val contacts by viewModel.allContacts.observeAsState(initial = emptyList())
     val context = LocalContext.current
@@ -164,15 +267,28 @@ fun MainScreen(
 
     Scaffold(
         floatingActionButton = {
-            FloatingActionButton(
-                onClick = onAddContact,
-                containerColor = MaterialTheme.colorScheme.primary
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Add,
-                    contentDescription = stringResource(R.string.add_contact),
-                    tint = Color.White
-                )
+            Column {
+                FloatingActionButton(
+                    onClick = onSyncContacts,
+                    containerColor = MaterialTheme.colorScheme.secondary,
+                    modifier = Modifier.padding(bottom = 16.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Refresh,
+                        contentDescription = "Sync Contacts",
+                        tint = Color.White
+                    )
+                }
+                FloatingActionButton(
+                    onClick = onAddContact,
+                    containerColor = MaterialTheme.colorScheme.primary
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Add,
+                        contentDescription = stringResource(R.string.add_contact),
+                        tint = Color.White
+                    )
+                }
             }
         }
     ) { paddingValues ->
