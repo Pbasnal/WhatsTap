@@ -10,7 +10,7 @@ interface ContactDao {
     fun getAllContacts(): LiveData<List<Contact>>
 
     @Insert
-    suspend fun insert(contact: Contact)
+    suspend fun insert(contact: Contact): Long
 
     @Update
     suspend fun update(contact: Contact)

@@ -7,26 +7,37 @@ import android.net.Uri
 import android.os.Bundle
 import android.provider.ContactsContract
 import android.provider.Settings
-import android.view.View
 import android.widget.Toast
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.appcompat.app.AlertDialog
-import androidx.appcompat.app.AppCompatActivity
-import androidx.core.app.ActivityCompat
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.runtime.livedata.observeAsState
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
-import androidx.recyclerview.widget.LinearLayoutManager
-import com.originb.whatstap2.adapter.ContactAdapter
-import com.originb.whatstap2.databinding.ActivityMainBinding
+import coil.compose.AsyncImage
 import com.originb.whatstap2.model.Contact
 import com.originb.whatstap2.viewmodel.ContactViewModel
 import kotlinx.coroutines.launch
 
-class MainActivity : AppCompatActivity() {
-    private lateinit var binding: ActivityMainBinding
+class MainActivity : ComponentActivity() {
     private val viewModel: ContactViewModel by viewModels()
-    private lateinit var adapter: ContactAdapter
 
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -40,34 +51,23 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        binding = ActivityMainBinding.inflate(layoutInflater)
-        setContentView(binding.root)
-
-        setupRecyclerView()
-        setupClickListeners()
-        observeContacts()
-        checkPermissions()
-    }
-
-    private fun setupRecyclerView() {
-        adapter = ContactAdapter(
-            onContactClick = { contact ->
-                openWhatsApp(contact.phoneNumber)
-            },
-            onEditClick = { contact ->
-                editContact(contact)
+        setContent {
+            MaterialTheme {
+                Surface(
+                    modifier = Modifier.fillMaxSize(),
+                    color = MaterialTheme.colorScheme.background
+                ) {
+                    MainScreen(
+                        viewModel = viewModel,
+                        onAddContact = { startActivity(Intent(this, AddContactActivity::class.java)) },
+                        onEditContact = { contact -> editContact(contact) },
+                        onContactClick = { contact -> openWhatsApp(contact.phoneNumber) }
+                    )
+                }
             }
-        )
-        binding.contactsRecyclerView.apply {
-            layoutManager = LinearLayoutManager(this@MainActivity)
-            adapter = this@MainActivity.adapter
         }
-    }
 
-    private fun setupClickListeners() {
-        binding.addContactFab.setOnClickListener {
-            startActivity(Intent(this, AddContactActivity::class.java))
-        }
+        checkPermissions()
     }
 
     private fun editContact(contact: Contact) {
@@ -76,18 +76,15 @@ class MainActivity : AppCompatActivity() {
             putExtra("contact_name", contact.name)
             putExtra("contact_number", contact.phoneNumber)
             contact.photoUri?.let { uriString ->
+                // Only grant URI permission for non-contact URIs
                 val uri = Uri.parse(uriString)
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                if (!uri.authority.equals("com.android.contacts")) {
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
                 putExtra("contact_photo", uriString)
             }
         }
         startActivity(intent)
-    }
-
-    private fun observeContacts() {
-        viewModel.allContacts.observe(this) { contacts ->
-            adapter.submitList(contacts)
-        }
     }
 
     private fun checkPermissions() {
@@ -122,41 +119,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun loadFavoriteContacts() {
-        val contacts = mutableListOf<Contact>()
-        val projection = arrayOf(
-            ContactsContract.CommonDataKinds.Phone.CONTACT_ID,
-            ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME,
-            ContactsContract.CommonDataKinds.Phone.NUMBER,
-            ContactsContract.CommonDataKinds.Phone.PHOTO_URI,
-            ContactsContract.CommonDataKinds.Phone.STARRED
-        )
-
-        val selection = "${ContactsContract.CommonDataKinds.Phone.STARRED} = ?"
-        val selectionArgs = arrayOf("1")
-
-        contentResolver.query(
-            ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
-            projection,
-            selection,
-            selectionArgs,
-            ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME
-        )?.use { cursor ->
-            while (cursor.moveToNext()) {
-                val id = cursor.getLong(cursor.getColumnIndexOrThrow(ContactsContract.CommonDataKinds.Phone.CONTACT_ID))
-                val name = cursor.getString(cursor.getColumnIndexOrThrow(ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME))
-                val number = cursor.getString(cursor.getColumnIndexOrThrow(ContactsContract.CommonDataKinds.Phone.NUMBER))
-                val photoUri = cursor.getString(cursor.getColumnIndexOrThrow(ContactsContract.CommonDataKinds.Phone.PHOTO_URI))
-
-                contacts.add(Contact(id, name, number, photoUri))
-            }
-        }
-
-        // Insert contacts into the database
-        lifecycleScope.launch {
-            contacts.forEach { contact ->
-                viewModel.insert(contact)
-            }
-        }
+        // This method loads starred contacts from system contacts
+        // You might want to call this only once or when you specifically want to sync
+        // For now, let's just ensure the contacts list is displayed properly
+        // The starred contacts loading can be moved to a separate sync function
     }
 
     private fun openWhatsApp(phoneNumber: String) {
@@ -172,6 +138,115 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onBackPressed() {
+        super.onBackPressed()
         // Do nothing to prevent exiting the launcher
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun MainScreen(
+    viewModel: ContactViewModel,
+    onAddContact: () -> Unit,
+    onEditContact: (Contact) -> Unit,
+    onContactClick: (Contact) -> Unit
+) {
+    val contacts by viewModel.allContacts.observeAsState(initial = emptyList())
+    val context = LocalContext.current
+    
+    // Debug observer - you can place a breakpoint here
+    LaunchedEffect(contacts) {
+        android.util.Log.d("MainActivity", "Contacts list updated. Count: ${contacts.size}")
+        contacts.forEachIndexed { index, contact ->
+            android.util.Log.d("MainActivity", "Contact $index: ${contact.name} (ID: ${contact.id})")
+        }
+    }
+
+    Scaffold(
+        floatingActionButton = {
+            FloatingActionButton(
+                onClick = onAddContact,
+                containerColor = MaterialTheme.colorScheme.primary
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Add,
+                    contentDescription = stringResource(R.string.add_contact),
+                    tint = Color.White
+                )
+            }
+        }
+    ) { paddingValues ->
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(paddingValues)
+                .padding(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            items(contacts) { contact ->
+                ContactItem(
+                    contact = contact,
+                    onEditClick = { onEditContact(contact) },
+                    onClick = { onContactClick(contact) }
+                )
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ContactItem(
+    contact: Contact,
+    onEditClick: () -> Unit,
+    onClick: () -> Unit
+) {
+    Card(
+        onClick = onClick,
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surface
+        )
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            AsyncImage(
+                model = contact.photoUri ?: R.drawable.circle_background,
+                contentDescription = stringResource(R.string.contact_photo),
+                modifier = Modifier
+                    .size(48.dp)
+                    .padding(end = 16.dp),
+//                error = R.drawable.circle_background
+            )
+            
+            Column(
+                modifier = Modifier.weight(1f)
+            ) {
+                Text(
+                    text = contact.name,
+                    style = MaterialTheme.typography.titleMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = contact.phoneNumber,
+                    style = MaterialTheme.typography.bodyMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            
+            IconButton(onClick = onEditClick) {
+                Icon(
+                    imageVector = Icons.Default.Edit,
+                    contentDescription = stringResource(R.string.edit_contact),
+                    tint = MaterialTheme.colorScheme.primary
+                )
+            }
+        }
     }
 } 

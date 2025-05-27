@@ -17,7 +17,8 @@ class ContactViewModel(application: Application) : AndroidViewModel(application)
 
     fun insert(contact: Contact) {
         viewModelScope.launch(Dispatchers.IO) {
-            contactDao.insert(contact)
+            val insertedId = contactDao.insert(contact)
+            android.util.Log.d("ContactViewModel", "Contact inserted with ID: $insertedId")
         }
     }
 
@@ -30,6 +31,7 @@ class ContactViewModel(application: Application) : AndroidViewModel(application)
     fun update(contact: Contact) {
         viewModelScope.launch(Dispatchers.IO) {
             contactDao.update(contact)
+            android.util.Log.d("ContactViewModel", "Contact updated: ${contact.name} with ID: ${contact.id}")
         }
     }
 

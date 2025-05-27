@@ -28,11 +28,13 @@ class AddContactActivity : AppCompatActivity() {
     private val pickImage = registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         uri?.let {
             try {
-                // Take persistable URI permission
-                contentResolver.takePersistableUriPermission(
-                    it,
-                    Intent.FLAG_GRANT_READ_URI_PERMISSION
-                )
+                // Only take persistable URI permission for media content, not contacts
+                if (it.scheme == "content" && !it.authority.equals("com.android.contacts")) {
+                    contentResolver.takePersistableUriPermission(
+                        it,
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION
+                    )
+                }
                 selectedPhotoUri = it.toString()
                 loadImage(it)
             } catch (e: Exception) {
@@ -111,10 +113,7 @@ class AddContactActivity : AppCompatActivity() {
 
                     if (!photoUri.isNullOrEmpty()) {
                         val uri = Uri.parse(photoUri)
-                        contentResolver.takePersistableUriPermission(
-                            uri,
-                            Intent.FLAG_GRANT_READ_URI_PERMISSION
-                        )
+                        // Don't take persistable permission for contact URIs
                         selectedPhotoUri = photoUri
                         loadImage(uri)
                     }
@@ -128,8 +127,10 @@ class AddContactActivity : AppCompatActivity() {
 
     private fun loadContactData() {
         // Check if we're in edit mode
-        editingContactId = intent.getLongExtra("contact_id", -1)
-        if (editingContactId != -1L) {
+        val contactId = intent.getLongExtra("contact_id", -1)
+        editingContactId = if (contactId != -1L) contactId else null
+        android.util.Log.d("AddContactActivity", "loadContactData - editingContactId: $editingContactId")
+        if (editingContactId != null) {
             // Load existing contact data
             val name = intent.getStringExtra("contact_name")
             val number = intent.getStringExtra("contact_number")
@@ -143,11 +144,7 @@ class AddContactActivity : AppCompatActivity() {
             if (!photoUriString.isNullOrEmpty()) {
                 try {
                     val uri = Uri.parse(photoUriString)
-                    // Take persistable URI permission
-                    contentResolver.takePersistableUriPermission(
-                        uri,
-                        Intent.FLAG_GRANT_READ_URI_PERMISSION
-                    )
+                    // Don't take persistable permission for contact URIs
                     loadImage(uri)
                 } catch (e: Exception) {
                     e.printStackTrace()
@@ -217,17 +214,35 @@ class AddContactActivity : AppCompatActivity() {
             return
         }
 
-        val contact = Contact(
-            id = editingContactId ?: System.currentTimeMillis(),
-            name = name,
-            phoneNumber = phoneNumber,
-            photoUri = selectedPhotoUri
-        )
+        android.util.Log.d("AddContactActivity", "Saving contact - editingContactId: $editingContactId")
+        android.util.Log.d("AddContactActivity", "Contact details - Name: $name, Phone: $phoneNumber, Photo: $selectedPhotoUri")
+
+        val contact = if (editingContactId != null) {
+            // For editing existing contact, use the existing ID
+            Contact(
+                id = editingContactId!!,
+                name = name,
+                phoneNumber = phoneNumber,
+                photoUri = selectedPhotoUri
+            )
+        } else {
+            // For new contact, let Room auto-generate the ID
+            Contact(
+                id = 0, // Room will auto-generate this
+                name = name,
+                phoneNumber = phoneNumber,
+                photoUri = selectedPhotoUri
+            )
+        }
+
+        android.util.Log.d("AddContactActivity", "Final contact object: $contact")
 
         if (editingContactId != null) {
             viewModel.update(contact)
+            Toast.makeText(this, "Contact updated successfully", Toast.LENGTH_SHORT).show()
         } else {
             viewModel.insert(contact)
+            Toast.makeText(this, "Contact saved successfully", Toast.LENGTH_SHORT).show()
         }
 
         finish()
