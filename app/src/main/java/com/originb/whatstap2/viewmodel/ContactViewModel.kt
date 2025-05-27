@@ -46,4 +46,20 @@ class ContactViewModel(application: Application) : AndroidViewModel(application)
     suspend fun insertSync(contact: Contact): Long {
         return contactDao.insert(contact)
     }
+    
+    suspend fun getContactByPhoneNumber(phoneNumber: String): Contact? {
+        return contactDao.getContactByPhoneNumber(phoneNumber)
+    }
+    
+    suspend fun insertOrReplaceSync(contact: Contact): Long {
+        return contactDao.insertOrReplace(contact)
+    }
+    
+    suspend fun deleteAllContacts() {
+        contactDao.deleteAllContacts()
+    }
+    
+    suspend fun getAllPhoneNumbers(): List<String> {
+        return contactDao.getAllPhoneNumbers()
+    }
 } 

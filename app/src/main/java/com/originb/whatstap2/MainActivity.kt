@@ -79,6 +79,9 @@ class MainActivity : ComponentActivity() {
         }
 
         checkPermissions()
+        
+        // Uncomment the line below to test phone normalization in logs
+        // testPhoneNormalization()
     }
 
     private fun editContact(contact: Contact) {
@@ -142,12 +145,13 @@ class MainActivity : ComponentActivity() {
             
             // Only load from system if database is empty or we want to sync
             if (existingContacts.isEmpty()) {
-                loadStarredContactsFromSystem()
+                val (insertedCount, _) = loadStarredContactsFromSystem()
+                android.util.Log.d("MainActivity", "Initial load completed: $insertedCount contacts loaded")
             }
         }
     }
     
-    private suspend fun loadStarredContactsFromSystem() {
+    private suspend fun loadStarredContactsFromSystem(): Pair<Int, Int> {
         val contacts = mutableListOf<Contact>()
         val projection = arrayOf(
             ContactsContract.CommonDataKinds.Phone.CONTACT_ID,
@@ -173,7 +177,6 @@ class MainActivity : ComponentActivity() {
                 android.util.Log.d("MainActivity", "Found ${cursor.count} starred contacts in system")
                 
                 while (cursor.moveToNext()) {
-                    val systemContactId = cursor.getLong(cursor.getColumnIndexOrThrow(ContactsContract.CommonDataKinds.Phone.CONTACT_ID))
                     val name = cursor.getString(cursor.getColumnIndexOrThrow(ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME))
                     val number = cursor.getString(cursor.getColumnIndexOrThrow(ContactsContract.CommonDataKinds.Phone.NUMBER))
                     val photoUri = cursor.getString(cursor.getColumnIndexOrThrow(ContactsContract.CommonDataKinds.Phone.PHOTO_URI))
@@ -197,16 +200,52 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
-            // Insert all contacts into Room database
+            // Insert or update contacts in Room database, avoiding duplicates
+            // Get all existing contacts once for efficiency
+            val existingContacts = viewModel.getAllContactsSync()
+            val existingPhoneNumbers = existingContacts.map { normalizePhoneNumber(it.phoneNumber) to it }.toMap().toMutableMap()
+            
+            var updatedCount = 0
+            var insertedCount = 0
+            
             contacts.forEach { contact ->
-                val insertedId = viewModel.insertSync(contact)
-                android.util.Log.d("MainActivity", "Inserted contact ${contact.name} with ID: $insertedId")
+                // Check for existing contact by normalized phone number
+                val normalizedNumber = normalizePhoneNumber(contact.phoneNumber)
+                val existingContact = existingPhoneNumbers[normalizedNumber]
+                
+                if (existingContact != null) {
+                    // Update existing contact with new information
+                    val updatedContact = existingContact.copy(
+                        name = contact.name,
+                        phoneLabel = contact.phoneLabel,
+                        photoUri = contact.photoUri ?: existingContact.photoUri
+                    )
+                    viewModel.update(updatedContact)
+                    updatedCount++
+                    android.util.Log.d("MainActivity", "Updated existing contact ${contact.name} (${contact.phoneNumber} -> $normalizedNumber) with ID: ${existingContact.id}")
+                    android.util.Log.d("MainActivity", "  Existing: ${existingContact.phoneNumber}, New: ${contact.phoneNumber}")
+                    
+                    // Update the map with the updated contact
+                    existingPhoneNumbers[normalizedNumber] = updatedContact
+                } else {
+                    // Insert new contact
+                    val insertedId = viewModel.insertSync(contact)
+                    val insertedContact = contact.copy(id = insertedId)
+                    insertedCount++
+                    android.util.Log.d("MainActivity", "Inserted new contact ${contact.name} (${contact.phoneNumber} -> $normalizedNumber) with ID: $insertedId")
+                    
+                    // Add the newly inserted contact to the map to prevent duplicates within this sync
+                    existingPhoneNumbers[normalizedNumber] = insertedContact
+                }
             }
             
-            android.util.Log.d("MainActivity", "Finished loading ${contacts.size} starred contacts")
+            android.util.Log.d("MainActivity", "Sync completed: $insertedCount new, $updatedCount updated, ${contacts.size} total starred contacts processed")
+            
+            return Pair(insertedCount, updatedCount)
             
         } catch (e: Exception) {
             android.util.Log.e("MainActivity", "Error loading starred contacts", e)
+            return Pair(0, 0)
         }
     }
     
@@ -238,10 +277,95 @@ class MainActivity : ComponentActivity() {
     
     private fun syncStarredContacts() {
         android.util.Log.d("MainActivity", "Manual sync of starred contacts requested")
-        lifecycleScope.launch(Dispatchers.IO) {
-            // Force sync regardless of existing contacts
-            loadStarredContactsFromSystem()
+        
+        // Show a toast to indicate sync is starting
+        runOnUiThread {
+            Toast.makeText(this, "Syncing starred contacts...", Toast.LENGTH_SHORT).show()
         }
+        
+        lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                // Force sync regardless of existing contacts
+                val (insertedCount, updatedCount) = loadStarredContactsFromSystem()
+                
+                // Show completion message with statistics
+                runOnUiThread {
+                    val message = if (insertedCount > 0 || updatedCount > 0) {
+                        "Sync completed: $insertedCount new, $updatedCount updated"
+                    } else {
+                        "Sync completed: No changes needed"
+                    }
+                    Toast.makeText(this@MainActivity, message, Toast.LENGTH_LONG).show()
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("MainActivity", "Error during sync", e)
+                runOnUiThread {
+                    Toast.makeText(this@MainActivity, "Sync failed: ${e.message}", Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+    }
+
+    private fun normalizePhoneNumber(phoneNumber: String): String {
+        // Remove all non-digit characters (spaces, dashes, parentheses, plus signs, etc.)
+        var normalized = phoneNumber.replace(Regex("[^\\d]"), "")
+        
+        // Handle common country code patterns
+        when {
+            // US/Canada numbers: Remove leading 1 if the number is 11 digits
+            normalized.length == 11 && normalized.startsWith("1") -> {
+                normalized = normalized.substring(1)
+            }
+            // Keep other country codes as-is for now
+            // You can add more specific country code handling here if needed
+        }
+        
+        android.util.Log.d("MainActivity", "Normalized '$phoneNumber' -> '$normalized'")
+        return normalized
+    }
+    
+    // Test function to verify normalization works correctly
+    private fun testPhoneNormalization() {
+        val testNumbers = listOf(
+            "+1234567890",
+            "1234567890", 
+            "+1 234 567 890",
+            "1 234 567 890",
+            "(234) 567-890",
+            "+1 (234) 567-890",
+            "234-567-890",
+            "234.567.890",
+            "+1-234-567-890",
+            "1 (234) 567-890",
+            "+91 98765 43210",
+            "91 98765 43210",
+            "+44 20 1234 5678",
+            "020 1234 5678"
+        )
+        
+        android.util.Log.d("MainActivity", "=== Phone Normalization Test ===")
+        testNumbers.forEach { number ->
+            val normalized = normalizePhoneNumber(number)
+            android.util.Log.d("MainActivity", "Test: '$number' -> '$normalized'")
+        }
+        
+        // Test duplicate detection
+        android.util.Log.d("MainActivity", "=== Duplicate Detection Test ===")
+        val duplicateGroups = listOf(
+            listOf("+1234567890", "1234567890", "+1 234 567 890", "1 (234) 567-890"),
+            listOf("+91 98765 43210", "91 98765 43210", "91-98765-43210")
+        )
+        
+        duplicateGroups.forEachIndexed { groupIndex, group ->
+            android.util.Log.d("MainActivity", "Group ${groupIndex + 1}:")
+            val normalizedNumbers = group.map { normalizePhoneNumber(it) }
+            group.forEachIndexed { index, original ->
+                android.util.Log.d("MainActivity", "  '$original' -> '${normalizedNumbers[index]}'")
+            }
+            val allSame = normalizedNumbers.all { it == normalizedNumbers.first() }
+            android.util.Log.d("MainActivity", "  All normalized to same: $allSame")
+        }
+        android.util.Log.d("MainActivity", "=== End Test ===")
     }
 
     private fun getPhoneTypeLabel(type: Int, customLabel: String?): String {
@@ -307,7 +431,7 @@ class MainActivity : ComponentActivity() {
                 makeVoiceCall(contact.phoneNumber)
             } else {
                 // Show a more helpful message with specific instructions
-                showWhatsAppCallInstructions(contact.name)
+//                showWhatsAppCallInstructions(contact.name)
             }
         } else {
             // Trigger normal voice call
@@ -315,15 +439,15 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun showWhatsAppCallInstructions(contactName: String) {
-        // Create a more informative dialog instead of just a toast
-        androidx.appcompat.app.AlertDialog.Builder(this)
-            .setTitle("WhatsApp Video Call")
-            .setMessage("WhatsApp chat with $contactName is now open.\n\nTo start a video call:\n• Tap the video call button (📹) at the top\n• Or tap the phone icon (📞) for voice call")
-            .setPositiveButton("Got it") { dialog, _ -> dialog.dismiss() }
-            .setIcon(android.R.drawable.ic_dialog_info)
-            .show()
-    }
+//    private fun showWhatsAppCallInstructions(contactName: String) {
+//        // Create a more informative dialog instead of just a toast
+//        androidx.appcompat.app.AlertDialog.Builder(this)
+//            .setTitle("WhatsApp Video Call")
+//            .setMessage("WhatsApp chat with $contactName is now open.\n\nTo start a video call:\n• Tap the video call button (📹) at the top\n• Or tap the phone icon (📞) for voice call")
+//            .setPositiveButton("Got it") { dialog, _ -> dialog.dismiss() }
+//            .setIcon(android.R.drawable.ic_dialog_info)
+//            .show()
+//    }
 
     private fun isWhatsAppInstalled(): Boolean {
         return try {

@@ -23,4 +23,16 @@ interface ContactDao {
     
     @Query("SELECT * FROM contacts ORDER BY name ASC")
     suspend fun getAllContactsSync(): List<Contact>
+    
+    @Query("SELECT * FROM contacts WHERE phoneNumber = :phoneNumber LIMIT 1")
+    suspend fun getContactByPhoneNumber(phoneNumber: String): Contact?
+    
+    @Query("DELETE FROM contacts")
+    suspend fun deleteAllContacts()
+    
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertOrReplace(contact: Contact): Long
+    
+    @Query("SELECT phoneNumber FROM contacts")
+    suspend fun getAllPhoneNumbers(): List<String>
 } 
