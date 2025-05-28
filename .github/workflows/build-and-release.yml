@@ -42,7 +42,7 @@ jobs:
         path: |
           ~/.gradle/caches
           ~/.gradle/wrapper
-        key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+        key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/*.gradle.kts', '**/gradle-wrapper.properties') }}
         restore-keys: |
           ${{ runner.os }}-gradle-
           
@@ -100,10 +100,10 @@ jobs:
         echo "keyAlias=${{ secrets.KEY_ALIAS }}" >> keystore.properties
         echo "keyPassword=${{ secrets.KEY_PASSWORD }}" >> keystore.properties
         
-    - name: Update version in build.gradle
+    - name: Update version in build.gradle.kts
       run: |
-        sed -i "s/versionCode [0-9]*/versionCode ${{ steps.version.outputs.VERSION_CODE }}/" app/build.gradle
-        sed -i "s/versionName \".*\"/versionName \"${{ steps.version.outputs.VERSION_NAME }}\"/" app/build.gradle
+        sed -i "s/versionCode = [0-9]*/versionCode = ${{ steps.version.outputs.VERSION_CODE }}/" app/build.gradle.kts
+        sed -i "s/versionName = \".*\"/versionName = \"${{ steps.version.outputs.VERSION_NAME }}\"/" app/build.gradle.kts
         
     - name: Build Release APK
       run: ./gradlew assembleRelease
