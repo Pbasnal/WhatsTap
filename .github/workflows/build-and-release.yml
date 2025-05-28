@@ -2,8 +2,10 @@ name: Build and Release WhatsTap2
 
 on:
   push:
+    branches:
+      - main  # Triggers on every push to main branch
     tags:
-      - 'v*'  # Triggers on version tags like v1.0.0, v1.1.0, etc.
+      - 'v*'  # Also triggers on version tags (for manual releases)
   workflow_dispatch:  # Allows manual triggering
     inputs:
       version_name:
@@ -22,6 +24,8 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
+      with:
+        fetch-depth: 0  # Fetch full history for proper tagging
       
     - name: Set up JDK 17
       uses: actions/setup-java@v4
@@ -45,21 +49,45 @@ jobs:
     - name: Make gradlew executable
       run: chmod +x gradlew
       
-    - name: Extract version from tag or input
+    - name: Determine version and tag strategy
       id: version
       run: |
-        if [ "${{ github.event_name }}" = "push" ]; then
-          # Extract version from tag (remove 'v' prefix)
+        if [ "${{ github.event_name }}" = "push" ] && [ "${{ github.ref }}" = "refs/heads/main" ]; then
+          # Main branch push - generate version from timestamp and run number
+          TIMESTAMP=$(date -u +%Y%m%d)
+          VERSION_NAME="1.0.${TIMESTAMP}.${{ github.run_number }}"
+          VERSION_CODE=${{ github.run_number }}
+          TAG_NAME="v$VERSION_NAME"
+          TRIGGER_TYPE="main_push"
+          echo "Main branch push detected - will create version: $VERSION_NAME"
+        elif [ "${{ github.event_name }}" = "push" ] && [[ "${{ github.ref }}" == refs/tags/* ]]; then
+          # Existing tag push
           VERSION_NAME=${GITHUB_REF#refs/tags/v}
           VERSION_CODE=${{ github.run_number }}
+          TAG_NAME=${GITHUB_REF#refs/tags/}
+          TRIGGER_TYPE="tag_push"
+          echo "Using existing tag: $TAG_NAME"
         else
-          # Use manual input
+          # Manual trigger
           VERSION_NAME=${{ github.event.inputs.version_name }}
           VERSION_CODE=${{ github.event.inputs.version_code }}
+          TAG_NAME="v$VERSION_NAME"
+          TRIGGER_TYPE="manual"
+          echo "Manual trigger - will create version: $VERSION_NAME"
         fi
+        
+        # Set outputs
         echo "VERSION_NAME=$VERSION_NAME" >> $GITHUB_OUTPUT
         echo "VERSION_CODE=$VERSION_CODE" >> $GITHUB_OUTPUT
+        echo "TAG_NAME=$TAG_NAME" >> $GITHUB_OUTPUT
+        echo "TRIGGER_TYPE=$TRIGGER_TYPE" >> $GITHUB_OUTPUT
+        echo "BUILD_TIME=$(date -u +%Y%m%d-%H%M%S)" >> $GITHUB_OUTPUT
+        echo "COMMIT_SHA=${GITHUB_SHA:0:8}" >> $GITHUB_OUTPUT
+        
         echo "Building version: $VERSION_NAME ($VERSION_CODE)"
+        echo "Tag: $TAG_NAME"
+        echo "Trigger: $TRIGGER_TYPE"
+        echo "Commit: ${GITHUB_SHA:0:8}"
         
     - name: Create keystore from secret
       run: |
@@ -83,18 +111,24 @@ jobs:
     - name: Build Release AAB
       run: ./gradlew bundleRelease
       
-    - name: Sign APK
+    - name: Sign and tag APK
       run: |
+        # Sign APK
         $ANDROID_HOME/build-tools/34.0.0/apksigner sign \
           --ks app/keystore.jks \
           --ks-key-alias ${{ secrets.KEY_ALIAS }} \
           --ks-pass pass:${{ secrets.KEYSTORE_PASSWORD }} \
           --key-pass pass:${{ secrets.KEY_PASSWORD }} \
-          --out app/build/outputs/apk/release/WhatsTap2-v${{ steps.version.outputs.VERSION_NAME }}-signed.apk \
+          --out app/build/outputs/apk/release/WhatsTap2-${{ steps.version.outputs.TAG_NAME }}-${{ steps.version.outputs.COMMIT_SHA }}.apk \
           app/build/outputs/apk/release/app-release-unsigned.apk
           
-    - name: Sign AAB
+        # Create a copy with simple name for release
+        cp app/build/outputs/apk/release/WhatsTap2-${{ steps.version.outputs.TAG_NAME }}-${{ steps.version.outputs.COMMIT_SHA }}.apk \
+           app/build/outputs/apk/release/WhatsTap2-${{ steps.version.outputs.TAG_NAME }}.apk
+          
+    - name: Sign and tag AAB
       run: |
+        # Sign AAB
         jarsigner -verbose -sigalg SHA256withRSA -digestalg SHA-256 \
           -keystore app/keystore.jks \
           -storepass ${{ secrets.KEYSTORE_PASSWORD }} \
@@ -102,39 +136,80 @@ jobs:
           app/build/outputs/bundle/release/app-release.aab \
           ${{ secrets.KEY_ALIAS }}
           
+        # Create tagged copy
+        cp app/build/outputs/bundle/release/app-release.aab \
+           app/build/outputs/bundle/release/WhatsTap2-${{ steps.version.outputs.TAG_NAME }}-${{ steps.version.outputs.COMMIT_SHA }}.aab
+           
+        # Create simple name copy for release
+        cp app/build/outputs/bundle/release/app-release.aab \
+           app/build/outputs/bundle/release/WhatsTap2-${{ steps.version.outputs.TAG_NAME }}.aab
+          
     - name: Verify APK signature
       run: |
         $ANDROID_HOME/build-tools/34.0.0/apksigner verify \
-          app/build/outputs/apk/release/WhatsTap2-v${{ steps.version.outputs.VERSION_NAME }}-signed.apk
+          app/build/outputs/apk/release/WhatsTap2-${{ steps.version.outputs.TAG_NAME }}.apk
           
-    - name: Generate APK info
-      id: apk_info
+    - name: Generate build metadata
+      id: build_info
       run: |
-        APK_SIZE=$(du -h app/build/outputs/apk/release/WhatsTap2-v${{ steps.version.outputs.VERSION_NAME }}-signed.apk | cut -f1)
-        AAB_SIZE=$(du -h app/build/outputs/bundle/release/app-release.aab | cut -f1)
+        APK_SIZE=$(du -h app/build/outputs/apk/release/WhatsTap2-${{ steps.version.outputs.TAG_NAME }}.apk | cut -f1)
+        AAB_SIZE=$(du -h app/build/outputs/bundle/release/WhatsTap2-${{ steps.version.outputs.TAG_NAME }}.aab | cut -f1)
         echo "APK_SIZE=$APK_SIZE" >> $GITHUB_OUTPUT
         echo "AAB_SIZE=$AAB_SIZE" >> $GITHUB_OUTPUT
         
+        # Generate checksums for verification
+        APK_SHA256=$(sha256sum app/build/outputs/apk/release/WhatsTap2-${{ steps.version.outputs.TAG_NAME }}.apk | cut -d' ' -f1)
+        AAB_SHA256=$(sha256sum app/build/outputs/bundle/release/WhatsTap2-${{ steps.version.outputs.TAG_NAME }}.aab | cut -d' ' -f1)
+        echo "APK_SHA256=$APK_SHA256" >> $GITHUB_OUTPUT
+        echo "AAB_SHA256=$AAB_SHA256" >> $GITHUB_OUTPUT
+        
         # Get APK info if aapt is available
         if command -v aapt &> /dev/null; then
-          APK_INFO=$(aapt dump badging app/build/outputs/apk/release/WhatsTap2-v${{ steps.version.outputs.VERSION_NAME }}-signed.apk | grep -E "(package|application-label|versionCode|versionName)" | head -4)
+          APK_INFO=$(aapt dump badging app/build/outputs/apk/release/WhatsTap2-${{ steps.version.outputs.TAG_NAME }}.apk | grep -E "(package|application-label|versionCode|versionName)" | head -4)
           echo "APK_INFO<<EOF" >> $GITHUB_OUTPUT
           echo "$APK_INFO" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
         fi
         
-    - name: Create Release
+        echo "✅ Build successful! Artifacts created:"
+        echo "- APK: WhatsTap2-${{ steps.version.outputs.TAG_NAME }}.apk ($APK_SIZE)"
+        echo "- AAB: WhatsTap2-${{ steps.version.outputs.TAG_NAME }}.aab ($AAB_SIZE)"
+        echo "- APK SHA256: $APK_SHA256"
+        echo "- AAB SHA256: $AAB_SHA256"
+        
+    - name: Create git tag (only if build successful)
+      if: steps.version.outputs.TRIGGER_TYPE == 'main_push' || steps.version.outputs.TRIGGER_TYPE == 'manual'
+      run: |
+        # Configure git for tagging
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+        
+        # Check if tag already exists
+        if git rev-parse "${{ steps.version.outputs.TAG_NAME }}" >/dev/null 2>&1; then
+          echo "⚠️ Tag ${{ steps.version.outputs.TAG_NAME }} already exists, skipping tag creation"
+        else
+          echo "🏷️ Creating new tag: ${{ steps.version.outputs.TAG_NAME }}"
+          git tag -a "${{ steps.version.outputs.TAG_NAME }}" -m "Release ${{ steps.version.outputs.TAG_NAME }} - Auto-generated from main branch push"
+          git push origin "${{ steps.version.outputs.TAG_NAME }}"
+          echo "✅ Tag created and pushed successfully"
+        fi
+        
+    - name: Create Release (only if build successful)
       id: create_release
-      uses: actions/create-release@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      uses: softprops/action-gh-release@v1
       with:
-        tag_name: ${{ github.ref_name || format('v{0}', steps.version.outputs.VERSION_NAME) }}
-        release_name: WhatsTap2 v${{ steps.version.outputs.VERSION_NAME }}
+        tag_name: ${{ steps.version.outputs.TAG_NAME }}
+        name: WhatsTap2 ${{ steps.version.outputs.TAG_NAME }}
         body: |
-          ## WhatsTap2 v${{ steps.version.outputs.VERSION_NAME }}
+          ## WhatsTap2 ${{ steps.version.outputs.TAG_NAME }}
           
           **A Simple Contact Launcher for Grandparents** 📱❤️
+          
+          ### 🚀 Auto-Release Information
+          - **Trigger**: ${{ steps.version.outputs.TRIGGER_TYPE == 'main_push' && 'Automatic (main branch push)' || steps.version.outputs.TRIGGER_TYPE == 'manual' && 'Manual trigger' || 'Tag push' }}
+          - **Commit**: [`${{ steps.version.outputs.COMMIT_SHA }}`](https://github.com/${{ github.repository }}/commit/${{ github.sha }})
+          - **Built**: ${{ steps.version.outputs.BUILD_TIME }} UTC
+          - **Workflow**: [#${{ github.run_number }}](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
           
           ### 📦 Downloads
           - **APK**: For direct installation on Android devices
@@ -142,9 +217,15 @@ jobs:
           
           ### 📊 Build Information
           - **Version**: ${{ steps.version.outputs.VERSION_NAME }} (Build ${{ steps.version.outputs.VERSION_CODE }})
-          - **APK Size**: ${{ steps.apk_info.outputs.APK_SIZE }}
-          - **AAB Size**: ${{ steps.apk_info.outputs.AAB_SIZE }}
-          - **Built**: ${{ github.run_number }} on ${{ github.sha }}
+          - **Git Tag**: `${{ steps.version.outputs.TAG_NAME }}`
+          - **APK Size**: ${{ steps.build_info.outputs.APK_SIZE }}
+          - **AAB Size**: ${{ steps.build_info.outputs.AAB_SIZE }}
+          
+          ### 🔐 Verification
+          ```
+          APK SHA256: ${{ steps.build_info.outputs.APK_SHA256 }}
+          AAB SHA256: ${{ steps.build_info.outputs.AAB_SHA256 }}
+          ```
           
           ### 🚀 Installation Instructions
           
@@ -173,31 +254,36 @@ jobs:
           ---
           
           **Made with ❤️ for keeping families connected**
+          
+          *This release was automatically generated from a successful build.*
+        files: |
+          app/build/outputs/apk/release/WhatsTap2-${{ steps.version.outputs.TAG_NAME }}.apk
+          app/build/outputs/bundle/release/WhatsTap2-${{ steps.version.outputs.TAG_NAME }}.aab
         draft: false
         prerelease: false
-        
-    - name: Upload APK to Release
-      uses: actions/upload-release-asset@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: app/build/outputs/apk/release/WhatsTap2-v${{ steps.version.outputs.VERSION_NAME }}-signed.apk
-        asset_name: WhatsTap2-v${{ steps.version.outputs.VERSION_NAME }}.apk
-        asset_content_type: application/vnd.android.package-archive
-        
-    - name: Upload AAB to Release
-      uses: actions/upload-release-asset@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: app/build/outputs/bundle/release/app-release.aab
-        asset_name: WhatsTap2-v${{ steps.version.outputs.VERSION_NAME }}.aab
-        asset_content_type: application/octet-stream
         
     - name: Clean up keystore
       if: always()
       run: |
         rm -f app/keystore.jks
-        rm -f keystore.properties 
+        rm -f keystore.properties
+        
+    - name: Build Summary
+      if: always()
+      run: |
+        echo "🎉 WhatsTap2 Build and Release Summary"
+        echo "====================================="
+        echo "Trigger: ${{ steps.version.outputs.TRIGGER_TYPE }}"
+        echo "Version: ${{ steps.version.outputs.VERSION_NAME }}"
+        echo "Tag: ${{ steps.version.outputs.TAG_NAME }}"
+        echo "Commit: ${{ steps.version.outputs.COMMIT_SHA }}"
+        echo "Status: ${{ job.status }}"
+        
+        if [ "${{ job.status }}" = "success" ]; then
+          echo "✅ Build completed successfully!"
+          echo "🏷️ Tag created: ${{ steps.version.outputs.TAG_NAME }}"
+          echo "📦 Release published with artifacts"
+          echo "🔗 View release: https://github.com/${{ github.repository }}/releases/tag/${{ steps.version.outputs.TAG_NAME }}"
+        else
+          echo "❌ Build failed - no tag or release created"
+        fi 
