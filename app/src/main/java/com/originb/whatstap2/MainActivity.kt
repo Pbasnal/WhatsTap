@@ -52,10 +52,11 @@ class MainActivity : ComponentActivity() {
         ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
         if (permissions.all { it.value }) {
-            checkStarredContactsInSystem()
-            loadFavoriteContacts()
+            android.util.Log.d("MainActivity", "Permissions granted - ready for manual sync")
         } else {
-            showPermissionDialog()
+            // Permissions denied - just continue without the popup
+            // The app can still function in limited capacity
+            android.util.Log.d("MainActivity", "Some permissions denied, continuing with limited functionality")
         }
     }
 
@@ -112,44 +113,13 @@ class MainActivity : ComponentActivity() {
         )
 
         if (permissions.all { ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED }) {
-            checkStarredContactsInSystem()
-            loadFavoriteContacts()
+            android.util.Log.d("MainActivity", "All permissions already granted - ready for manual sync")
         } else {
             requestPermissionLauncher.launch(permissions)
         }
     }
 
-    private fun showPermissionDialog() {
-        AlertDialog.Builder(this)
-            .setTitle("Permissions Required")
-            .setMessage("This app needs permissions to function as a launcher. Please grant the permissions in Settings.")
-            .setPositiveButton("Open Settings") { _, _ ->
-                startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-                    data = Uri.fromParts("package", packageName, null)
-                })
-            }
-            .setNegativeButton("Exit") { _, _ ->
-                finish()
-            }
-            .setCancelable(false)
-            .show()
-    }
-
-    private fun loadFavoriteContacts() {
-        android.util.Log.d("MainActivity", "Loading favorite contacts from system...")
-        
-        lifecycleScope.launch(Dispatchers.IO) {
-            // First check if we already have contacts in the database
-            val existingContacts = viewModel.getAllContactsSync()
-            android.util.Log.d("MainActivity", "Existing contacts in database: ${existingContacts.size}")
-            
-            // Only load from system if database is empty or we want to sync
-            if (existingContacts.isEmpty()) {
-                val (insertedCount, _) = loadStarredContactsFromSystem()
-                android.util.Log.d("MainActivity", "Initial load completed: $insertedCount contacts loaded")
-            }
-        }
-    }
+    // loadFavoriteContacts function removed to prevent automatic syncing
     
     private suspend fun loadStarredContactsFromSystem(): Pair<Int, Int> {
         val contacts = mutableListOf<Contact>()
@@ -796,11 +766,6 @@ class MainActivity : ComponentActivity() {
         } catch (e: Exception) {
             Toast.makeText(this, "Failed to make call", Toast.LENGTH_SHORT).show()
         }
-    }
-
-    override fun onBackPressed() {
-        super.onBackPressed()
-        // Do nothing to prevent exiting the launcher
     }
 }
 
