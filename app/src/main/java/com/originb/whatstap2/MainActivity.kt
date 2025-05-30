@@ -185,6 +185,8 @@ class MainActivity : ComponentActivity() {
 
                     // Get the phone label based on type or custom label
                     val phoneLabel = getPhoneTypeLabel(type, customLabel)
+                    
+                    android.util.Log.d("MainActivity", "Contact: $name - Type: $type, Custom Label: '$customLabel' -> Final Label: '$phoneLabel'")
 
                     // Create contact with Room auto-generated ID (0) but store system ID for reference
                     val contact = Contact(
@@ -214,19 +216,34 @@ class MainActivity : ComponentActivity() {
                 val existingContact = existingPhoneNumbers[normalizedNumber]
                 
                 if (existingContact != null) {
-                    // Update existing contact with new information
-                    val updatedContact = existingContact.copy(
-                        name = contact.name,
-                        phoneLabel = contact.phoneLabel,
-                        photoUri = contact.photoUri ?: existingContact.photoUri
-                    )
-                    viewModel.update(updatedContact)
-                    updatedCount++
-                    android.util.Log.d("MainActivity", "Updated existing contact ${contact.name} (${contact.phoneNumber} -> $normalizedNumber) with ID: ${existingContact.id}")
-                    android.util.Log.d("MainActivity", "  Existing: ${existingContact.phoneNumber}, New: ${contact.phoneNumber}")
+                    // Check if any fields actually changed before updating
+                    val nameChanged = existingContact.name != contact.name
+                    val labelChanged = existingContact.phoneLabel != contact.phoneLabel
+                    val photoChanged = contact.photoUri != null && existingContact.photoUri != contact.photoUri
                     
-                    // Update the map with the updated contact
-                    existingPhoneNumbers[normalizedNumber] = updatedContact
+                    android.util.Log.d("MainActivity", "=== Contact Update Check ===")
+                    android.util.Log.d("MainActivity", "Contact: ${contact.name} (${contact.phoneNumber})")
+                    android.util.Log.d("MainActivity", "Name changed: $nameChanged (${existingContact.name} -> ${contact.name})")
+                    android.util.Log.d("MainActivity", "Label changed: $labelChanged (${existingContact.phoneLabel} -> ${contact.phoneLabel})")
+                    android.util.Log.d("MainActivity", "Photo changed: $photoChanged (${existingContact.photoUri} -> ${contact.photoUri})")
+                    
+                    if (nameChanged || labelChanged || photoChanged) {
+                        // Update existing contact with new information
+                        val updatedContact = existingContact.copy(
+                            name = contact.name,
+                            phoneLabel = contact.phoneLabel,
+                            photoUri = contact.photoUri ?: existingContact.photoUri
+                        )
+                        viewModel.update(updatedContact)
+                        updatedCount++
+                        android.util.Log.d("MainActivity", "Updated existing contact ${contact.name} with ID: ${existingContact.id}")
+                        android.util.Log.d("MainActivity", "  Phone label updated: ${existingContact.phoneLabel} -> ${contact.phoneLabel}")
+                        
+                        // Update the map with the updated contact
+                        existingPhoneNumbers[normalizedNumber] = updatedContact
+                    } else {
+                        android.util.Log.d("MainActivity", "No changes detected for contact: ${contact.name}")
+                    }
                 } else {
                     // Insert new contact
                     val insertedId = viewModel.insertSync(contact)
@@ -369,7 +386,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun getPhoneTypeLabel(type: Int, customLabel: String?): String {
-        return when (type) {
+        val result = when (type) {
             ContactsContract.CommonDataKinds.Phone.TYPE_HOME -> "Home"
             ContactsContract.CommonDataKinds.Phone.TYPE_MOBILE -> "Mobile"
             ContactsContract.CommonDataKinds.Phone.TYPE_WORK -> "Work"
@@ -385,14 +402,20 @@ class MainActivity : ComponentActivity() {
             ContactsContract.CommonDataKinds.Phone.TYPE_CUSTOM -> {
                 // Check if custom label contains WhatsApp-related terms
                 val label = customLabel?.lowercase() ?: "custom"
+                android.util.Log.d("MainActivity", "Processing custom label: '$customLabel' -> lowercase: '$label'")
                 if (label.contains("whatsapp") || label.contains("wa")) {
+                    android.util.Log.d("MainActivity", "Detected WhatsApp label!")
                     customLabel ?: "WhatsApp"
                 } else {
+                    android.util.Log.d("MainActivity", "Not a WhatsApp label, using: ${customLabel ?: "Custom"}")
                     customLabel ?: "Custom"
                 }
             }
             else -> "Phone"
         }
+        
+        android.util.Log.d("MainActivity", "getPhoneTypeLabel: type=$type, customLabel='$customLabel' -> result='$result'")
+        return result
     }
 
     private fun openWhatsApp(phoneNumber: String) {
@@ -855,13 +878,21 @@ fun ContactItem(
     onEditClick: () -> Unit,
     onClick: () -> Unit
 ) {
+    // Check if this is a WhatsApp contact
+    val isWhatsAppContact = contact.phoneLabel?.lowercase()?.contains("whatsapp") == true ||
+                           contact.phoneLabel?.lowercase()?.contains("wa") == true
+    
     Card(
         onClick = onClick,
         modifier = Modifier
             .fillMaxWidth()
             .aspectRatio(0.8f), // Makes the card taller than it is wide
         colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surface
+            containerColor = if (isWhatsAppContact) {
+                Color(0xFF005947) // Custom green color: #005947, RGB(0,89,71)
+            } else {
+                MaterialTheme.colorScheme.surface
+            }
         ),
         elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
     ) {
@@ -896,7 +927,8 @@ fun ContactItem(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 4.dp),
-                    textAlign = TextAlign.Center
+                    textAlign = TextAlign.Center,
+                    color = if (isWhatsAppContact) Color.White else MaterialTheme.colorScheme.onSurface
                 )
                 
                 // Phone number below the name
@@ -909,7 +941,7 @@ fun ContactItem(
                         .fillMaxWidth()
                         .padding(horizontal = 4.dp, vertical = 2.dp),
                     textAlign = TextAlign.Center,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    color = if (isWhatsAppContact) Color.White.copy(alpha = 0.8f) else MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 
                 // Phone label below the number (if available)
@@ -923,7 +955,7 @@ fun ContactItem(
                             .fillMaxWidth()
                             .padding(horizontal = 4.dp),
                         textAlign = TextAlign.Center,
-                        color = MaterialTheme.colorScheme.primary
+                        color = if (isWhatsAppContact) Color.White else MaterialTheme.colorScheme.primary
                     )
                 }
             }
@@ -938,7 +970,7 @@ fun ContactItem(
                 Icon(
                     imageVector = Icons.Default.Edit,
                     contentDescription = stringResource(R.string.edit_contact),
-                    tint = MaterialTheme.colorScheme.primary,
+                    tint = if (isWhatsAppContact) Color.White else MaterialTheme.colorScheme.primary,
                     modifier = Modifier.size(20.dp)
                 )
             }
