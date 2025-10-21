@@ -16,12 +16,18 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.bumptech.glide.Glide
 import com.originb.whatstap2.databinding.ActivityAddContactBinding
-import com.originb.whatstap2.model.Contact
-import com.originb.whatstap2.viewmodel.ContactViewModel
+import com.originb.whatstap2.domain.model.Contact
+import com.originb.whatstap2.util.Logger
+import com.originb.whatstap2.util.PhoneTypeUtils
+import com.originb.whatstap2.viewmodel.AddContactViewModel
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class AddContactActivity : AppCompatActivity() {
     private lateinit var binding: ActivityAddContactBinding
-    private val viewModel: ContactViewModel by viewModels()
+    private val viewModel: AddContactViewModel by viewModels()
     private var selectedPhotoUri: String? = null
     private var editingContactId: Long? = null
     private var phoneLabel: String? = null
@@ -116,7 +122,7 @@ class AddContactActivity : AppCompatActivity() {
                     val customLabel = if (labelIndex != -1) cursor.getString(labelIndex) else null
 
                     // Get the phone label based on type or custom label
-                    phoneLabel = getPhoneTypeLabel(type, customLabel)
+                    phoneLabel = PhoneTypeUtils.getPhoneTypeLabel(type, customLabel)
 
                     binding.nameInput.setText(name)
                     binding.phoneInput.setText(number)
@@ -136,34 +142,29 @@ class AddContactActivity : AppCompatActivity() {
     }
 
     private fun loadContactData() {
-        // Check if we're in edit mode
         val contactId = intent.getLongExtra("contact_id", -1)
         editingContactId = if (contactId != -1L) contactId else null
-        android.util.Log.d("AddContactActivity", "loadContactData - editingContactId: $editingContactId")
+        Logger.d("AddContactActivity", "loadContactData - editingContactId: $editingContactId")
+        
         if (editingContactId != null) {
-            // Load existing contact data
-            val name = intent.getStringExtra("contact_name")
-            val number = intent.getStringExtra("contact_number")
-            val photoUriString = intent.getStringExtra("contact_photo")
-            phoneLabel = intent.getStringExtra("contact_label")
-
-            binding.nameInput.setText(name)
-            binding.phoneInput.setText(number)
-            selectedPhotoUri = photoUriString
-
-            // Load photo if available
-            if (!photoUriString.isNullOrEmpty()) {
-                try {
-                    val uri = Uri.parse(photoUriString)
-                    // Don't take persistable permission for contact URIs
-                    loadImage(uri)
-                } catch (e: Exception) {
-                    e.printStackTrace()
-                    binding.contactPhoto.setImageResource(R.drawable.circle_background)
+            CoroutineScope(Dispatchers.Main).launch {
+                val contact = withContext(Dispatchers.IO) {
+                    viewModel.getContactById(editingContactId!!)
                 }
-            } else {
-                binding.contactPhoto.setImageResource(R.drawable.circle_background)
+                contact?.let {
+                    binding.nameInput.setText(it.name)
+                    binding.phoneInput.setText(it.phoneNumber)
+                    selectedPhotoUri = it.photoUri
+                    phoneLabel = it.phoneLabel
+                    if (!it.photoUri.isNullOrEmpty()) {
+                        loadImage(Uri.parse(it.photoUri))
+                    } else {
+                        binding.contactPhoto.setImageResource(R.drawable.circle_background)
+                    }
+                }
             }
+        } else {
+            binding.contactPhoto.setImageResource(R.drawable.circle_background)
         }
     }
 
@@ -216,33 +217,6 @@ class AddContactActivity : AppCompatActivity() {
         pickImage.launch("image/*")
     }
 
-    private fun getPhoneTypeLabel(type: Int, customLabel: String?): String {
-        return when (type) {
-            ContactsContract.CommonDataKinds.Phone.TYPE_HOME -> "Home"
-            ContactsContract.CommonDataKinds.Phone.TYPE_MOBILE -> "Mobile"
-            ContactsContract.CommonDataKinds.Phone.TYPE_WORK -> "Work"
-            ContactsContract.CommonDataKinds.Phone.TYPE_FAX_WORK -> "Work Fax"
-            ContactsContract.CommonDataKinds.Phone.TYPE_FAX_HOME -> "Home Fax"
-            ContactsContract.CommonDataKinds.Phone.TYPE_PAGER -> "Pager"
-            ContactsContract.CommonDataKinds.Phone.TYPE_OTHER -> "Other"
-            ContactsContract.CommonDataKinds.Phone.TYPE_MAIN -> "Main"
-            ContactsContract.CommonDataKinds.Phone.TYPE_WORK_MOBILE -> "Work Mobile"
-            ContactsContract.CommonDataKinds.Phone.TYPE_WORK_PAGER -> "Work Pager"
-            ContactsContract.CommonDataKinds.Phone.TYPE_ASSISTANT -> "Assistant"
-            ContactsContract.CommonDataKinds.Phone.TYPE_MMS -> "MMS"
-            ContactsContract.CommonDataKinds.Phone.TYPE_CUSTOM -> {
-                // Check if custom label contains WhatsApp-related terms
-                val label = customLabel?.lowercase() ?: "custom"
-                if (label.contains("whatsapp") || label.contains("wa")) {
-                    customLabel ?: "WhatsApp"
-                } else {
-                    customLabel ?: "Custom"
-                }
-            }
-            else -> "Phone"
-        }
-    }
-
     private fun saveContact() {
         val name = binding.nameInput.text.toString()
         val phoneNumber = binding.phoneInput.text.toString()
@@ -252,38 +226,21 @@ class AddContactActivity : AppCompatActivity() {
             return
         }
 
-        android.util.Log.d("AddContactActivity", "Saving contact - editingContactId: $editingContactId")
-        android.util.Log.d("AddContactActivity", "Contact details - Name: $name, Phone: $phoneNumber, Photo: $selectedPhotoUri")
+        Logger.d("AddContactActivity", "Saving contact - editingContactId: $editingContactId")
+        Logger.d("AddContactActivity", "Contact details - Name: $name, Phone: $phoneNumber, Photo: $selectedPhotoUri")
 
-        val contact = if (editingContactId != null) {
-            // For editing existing contact, use the existing ID
-            Contact(
-                id = editingContactId!!,
-                name = name,
-                phoneNumber = phoneNumber,
-                phoneLabel = phoneLabel,
-                photoUri = selectedPhotoUri
-            )
-        } else {
-            // For new contact, let Room auto-generate the ID
-            Contact(
-                id = 0, // Room will auto-generate this
-                name = name,
-                phoneNumber = phoneNumber,
-                phoneLabel = phoneLabel,
-                photoUri = selectedPhotoUri
-            )
-        }
+        val contact = Contact(
+            id = editingContactId ?: 0,
+            name = name,
+            phoneNumber = phoneNumber,
+            phoneLabel = phoneLabel,
+            photoUri = selectedPhotoUri
+        )
 
-        android.util.Log.d("AddContactActivity", "Final contact object: $contact")
+        Logger.d("AddContactActivity", "Final contact object: $contact")
 
-        if (editingContactId != null) {
-            viewModel.update(contact)
-            Toast.makeText(this, "Contact updated successfully", Toast.LENGTH_SHORT).show()
-        } else {
-            viewModel.insert(contact)
-            Toast.makeText(this, "Contact saved successfully", Toast.LENGTH_SHORT).show()
-        }
+        viewModel.saveContact(contact)
+        Toast.makeText(this, "Contact saved successfully", Toast.LENGTH_SHORT).show()
 
         finish()
     }

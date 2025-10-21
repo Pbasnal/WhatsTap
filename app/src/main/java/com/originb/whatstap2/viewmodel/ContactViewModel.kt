@@ -5,61 +5,66 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.LiveData
 import androidx.lifecycle.viewModelScope
 import com.originb.whatstap2.data.ContactDatabase
+import com.originb.whatstap2.domain.repository.ContactRepository
 import com.originb.whatstap2.model.Contact
+import com.originb.whatstap2.util.Logger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
 class ContactViewModel(application: Application) : AndroidViewModel(application) {
-    private val database = ContactDatabase.getDatabase(application)
-    private val contactDao = database.contactDao()
+    private val repository: ContactRepository
 
-    val allContacts: LiveData<List<Contact>> = contactDao.getAllContacts()
+    init {
+        repository = ContactDatabase.getContactRepository(application)
+    }
+
+    val allContacts: LiveData<List<Contact>> = repository.getAllContacts()
 
     fun insert(contact: Contact) {
         viewModelScope.launch(Dispatchers.IO) {
-            val insertedId = contactDao.insert(contact)
-            android.util.Log.d("ContactViewModel", "Contact inserted with ID: $insertedId")
+            val insertedId = repository.insert(contact)
+            Logger.d("ContactViewModel", "Contact inserted with ID: $insertedId")
         }
     }
 
     fun delete(contact: Contact) {
         viewModelScope.launch(Dispatchers.IO) {
-            contactDao.delete(contact)
+            repository.delete(contact)
         }
     }
 
     fun update(contact: Contact) {
         viewModelScope.launch(Dispatchers.IO) {
-            contactDao.update(contact)
-            android.util.Log.d("ContactViewModel", "Contact updated: ${contact.name} with ID: ${contact.id}")
+            repository.update(contact)
+            Logger.d("ContactViewModel", "Contact updated: ${contact.name} with ID: ${contact.id}")
         }
     }
 
     suspend fun getContactById(id: Long): Contact? {
-        return contactDao.getContactById(id)
+        return repository.getContactById(id)
     }
     
     suspend fun getAllContactsSync(): List<Contact> {
-        return contactDao.getAllContactsSync()
+        return repository.getAllContactsSync()
     }
     
     suspend fun insertSync(contact: Contact): Long {
-        return contactDao.insert(contact)
+        return repository.insertSync(contact)
     }
     
     suspend fun getContactByPhoneNumber(phoneNumber: String): Contact? {
-        return contactDao.getContactByPhoneNumber(phoneNumber)
+        return repository.getContactByPhoneNumber(phoneNumber)
     }
     
     suspend fun insertOrReplaceSync(contact: Contact): Long {
-        return contactDao.insertOrReplace(contact)
+        return repository.insertOrReplaceSync(contact)
     }
     
     suspend fun deleteAllContacts() {
-        contactDao.deleteAllContacts()
+        repository.deleteAllContacts()
     }
     
     suspend fun getAllPhoneNumbers(): List<String> {
-        return contactDao.getAllPhoneNumbers()
+        return repository.getAllPhoneNumbers()
     }
 } 
