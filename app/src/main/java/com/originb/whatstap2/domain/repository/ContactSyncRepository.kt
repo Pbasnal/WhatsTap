@@ -3,8 +3,6 @@ package com.originb.whatstap2.domain.repository
 import android.content.ContentResolver
 import android.content.Context
 import android.provider.ContactsContract
-import com.originb.whatstap2.data.mapper.toDomain
-import com.originb.whatstap2.data.mapper.toEntity
 import com.originb.whatstap2.domain.model.Contact
 import com.originb.whatstap2.domain.model.Result
 import com.originb.whatstap2.domain.model.SyncResult
@@ -14,96 +12,129 @@ import com.originb.whatstap2.util.PhoneTypeUtils
 import com.originb.whatstap2.viewmodel.ContactViewModel
 
 class ContactSyncRepository(private val context: Context, private val viewModel: ContactViewModel) {
-
     private val contentResolver: ContentResolver = context.contentResolver
 
     suspend fun syncStarredContacts(): Result<SyncResult> {
         return try {
-            val systemContacts = fetchStarredContactsFromSystem()
-            val existingContactsMap = getExistingContactsMap()
+            val starredContacts = fetchStarredContactsFromSystem()
+            val existingContacts = getExistingContactsMap()
 
-            var updatedCount = 0
             var insertedCount = 0
+            var updatedCount = 0
 
-            systemContacts.forEach { contact ->
-                val normalizedNumber = PhoneNumberFormatter.normalizePhoneNumber(contact.phoneNumber)
-                val existingContact = existingContactsMap[normalizedNumber]
-
-                if (existingContact != null) {
-                    val nameChanged = existingContact.name != contact.name
-                    val labelChanged = existingContact.phoneLabel != contact.phoneLabel
-                    val photoChanged = contact.photoUri != null && existingContact.photoUri != contact.photoUri
-
-                    if (nameChanged || labelChanged || photoChanged) {
-                        val updatedContact = existingContact.copy(
-                            name = contact.name,
-                            phoneLabel = contact.phoneLabel,
-                            photoUri = contact.photoUri ?: existingContact.photoUri
-                        )
-                        viewModel.update(updatedContact)
-                        updatedCount++
-                    }
-                } else {
+            starredContacts.forEach { contact ->
+                val existingContact = existingContacts[contact.phoneNumber]
+                
+                if (existingContact == null) {
                     viewModel.insert(contact)
                     insertedCount++
+                } else if (needsUpdate(existingContact, contact)) {
+                    val updatedContact = contact.copy(id = existingContact.id)
+                    viewModel.update(updatedContact)
+                    updatedCount++
                 }
             }
-            Logger.d("ContactSyncRepository", "Sync completed: $insertedCount new, $updatedCount updated, ${systemContacts.size} total starred contacts processed")
-            Result.Success(SyncResult(insertedCount, updatedCount, insertedCount > 0 || updatedCount > 0))
+
+            val syncResult = SyncResult(
+                inserted = insertedCount,
+                updated = updatedCount,
+                hasChanges = insertedCount > 0 || updatedCount > 0
+            )
+
+            Logger.logContactSync(insertedCount, updatedCount)
+            Result.Success(syncResult)
         } catch (e: Exception) {
-            Logger.e("ContactSyncRepository", "Error during contact sync", e)
-            Result.Error("Error during contact sync: ${e.message}", e)
+            Logger.e("ContactSyncRepository", "Error syncing contacts", e)
+            Result.Error("Failed to sync contacts: ${e.message}")
         }
     }
 
     private suspend fun fetchStarredContactsFromSystem(): List<Contact> {
         val contacts = mutableListOf<Contact>()
         val projection = arrayOf(
-            ContactsContract.CommonDataKinds.Phone.CONTACT_ID,
-            ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME,
-            ContactsContract.CommonDataKinds.Phone.NUMBER,
-            ContactsContract.CommonDataKinds.Phone.PHOTO_URI,
-            ContactsContract.CommonDataKinds.Phone.STARRED,
-            ContactsContract.CommonDataKinds.Phone.TYPE,
-            ContactsContract.CommonDataKinds.Phone.LABEL
+            ContactsContract.Contacts._ID,
+            ContactsContract.Contacts.DISPLAY_NAME,
+            ContactsContract.Contacts.STARRED
         )
-        val selection = "${ContactsContract.CommonDataKinds.Phone.STARRED} = ?"
+
+        val selection = "${ContactsContract.Contacts.STARRED} = ?"
         val selectionArgs = arrayOf("1")
 
         contentResolver.query(
-            ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
+            ContactsContract.Contacts.CONTENT_URI,
             projection,
             selection,
             selectionArgs,
-            ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME
-        )?.use { cursor ->
-            Logger.d("ContactSyncRepository", "Found ${cursor.count} starred contacts in system")
+            null
+        )?.use { contactsCursor ->
+            val contactIdIndex = contactsCursor.getColumnIndex(ContactsContract.Contacts._ID)
+            val contactNameIndex = contactsCursor.getColumnIndex(ContactsContract.Contacts.DISPLAY_NAME)
 
-            while (cursor.moveToNext()) {
-                val name = cursor.getString(cursor.getColumnIndexOrThrow(ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME))
-                val number = cursor.getString(cursor.getColumnIndexOrThrow(ContactsContract.CommonDataKinds.Phone.NUMBER))
-                val photoUri = cursor.getString(cursor.getColumnIndexOrThrow(ContactsContract.CommonDataKinds.Phone.PHOTO_URI))
-                val type = cursor.getInt(cursor.getColumnIndexOrThrow(ContactsContract.CommonDataKinds.Phone.TYPE))
-                val customLabel = cursor.getString(cursor.getColumnIndexOrThrow(ContactsContract.CommonDataKinds.Phone.LABEL))
+            while (contactsCursor.moveToNext()) {
+                if (contactIdIndex == -1 || contactNameIndex == -1) {
+                    Logger.w("ContactSyncRepository", "Invalid column indices")
+                    continue
+                }
 
-                val phoneLabel = PhoneTypeUtils.getPhoneTypeLabel(type, customLabel)
+                val contactId = contactsCursor.getLong(contactIdIndex)
+                val contactName = contactsCursor.getString(contactNameIndex) ?: "Unknown"
 
-                val contact = Contact(
-                    id = 0, // Will be ignored by Room, but kept for domain model consistency
-                    name = name ?: "Unknown",
-                    phoneNumber = number ?: "",
-                    phoneLabel = phoneLabel,
-                    photoUri = photoUri,
-                    isWhatsAppContact = PhoneTypeUtils.isWhatsAppLabel(phoneLabel)
+                // Get phone details
+                val phoneCursor = contentResolver.query(
+                    ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
+                    null,
+                    "${ContactsContract.CommonDataKinds.Phone.CONTACT_ID} = ?",
+                    arrayOf(contactId.toString()),
+                    null
                 )
-                contacts.add(contact)
-                Logger.d("ContactSyncRepository", "Added starred contact: ${contact.name} - ${contact.phoneNumber} (${phoneLabel})")
+
+                phoneCursor?.use { phonesForContact ->
+                    val phoneNumberIndex = phonesForContact.getColumnIndex(ContactsContract.CommonDataKinds.Phone.NUMBER)
+                    val phoneTypeIndex = phonesForContact.getColumnIndex(ContactsContract.CommonDataKinds.Phone.TYPE)
+                    val phoneLabelIndex = phonesForContact.getColumnIndex(ContactsContract.CommonDataKinds.Phone.LABEL)
+
+                    while (phonesForContact.moveToNext()) {
+                        if (phoneNumberIndex == -1 || phoneTypeIndex == -1) {
+                            Logger.w("ContactSyncRepository", "Invalid phone column indices")
+                            continue
+                        }
+
+                        val phoneNumber = phonesForContact.getString(phoneNumberIndex)
+                        val phoneType = phonesForContact.getInt(phoneTypeIndex)
+                        val phoneLabel = if (phoneLabelIndex != -1) phonesForContact.getString(phoneLabelIndex) else null
+
+                        if (phoneNumber.isNullOrBlank()) {
+                            continue
+                        }
+
+                        val normalizedNumber = PhoneNumberFormatter.normalizePhoneNumber(phoneNumber)
+                        val formattedLabel = PhoneTypeUtils.getPhoneTypeLabel(phoneType, phoneLabel)
+                        val isWhatsAppContact = PhoneTypeUtils.isWhatsAppLabel(formattedLabel)
+
+                        contacts.add(
+                            Contact(
+                                id = 0, // Room will generate the ID
+                                name = contactName,
+                                phoneNumber = normalizedNumber,
+                                phoneLabel = formattedLabel,
+                                isWhatsAppContact = isWhatsAppContact
+                            )
+                        )
+                    }
+                }
             }
         }
+
         return contacts
     }
 
     private suspend fun getExistingContactsMap(): Map<String, Contact> {
-        return viewModel.getAllContactsSync().associateBy { PhoneNumberFormatter.normalizePhoneNumber(it.phoneNumber) }
+        return viewModel.allContacts.value?.associateBy { it.phoneNumber } ?: emptyMap()
+    }
+
+    private fun needsUpdate(existingContact: Contact, newContact: Contact): Boolean {
+        return existingContact.name != newContact.name ||
+               existingContact.phoneLabel != newContact.phoneLabel ||
+               existingContact.isWhatsAppContact != newContact.isWhatsAppContact
     }
 }

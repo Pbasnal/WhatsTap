@@ -6,12 +6,11 @@ import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
-import com.originb.whatstap2.data.ContactDao
-import com.originb.whatstap2.data.local.ContactRepositoryImpl
+import com.originb.whatstap2.data.local.ContactEntity
 import com.originb.whatstap2.domain.repository.ContactRepository
-import com.originb.whatstap2.model.Contact
+import com.originb.whatstap2.data.local.ContactRepositoryImpl
 
-@Database(entities = [Contact::class], version = 2)
+@Database(entities = [ContactEntity::class], version = 2)
 abstract class ContactDatabase : RoomDatabase() {
     abstract fun contactDao(): ContactDao
 

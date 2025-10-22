@@ -17,7 +17,6 @@ object Logger {
             Log.e("$TAG_PREFIX:$tag", message, throwable)
         } else {
             // In production, could send to crash reporting service
-            // Firebase Crashlytics, Sentry, etc.
         }
     }
     
@@ -27,7 +26,6 @@ object Logger {
         }
     }
 
-    // Optional: Add structured logging for specific events
     fun logContactSync(insertedCount: Int, updatedCount: Int) {
         d("ContactSync", "Inserted: $insertedCount, Updated: $updatedCount")
     }
