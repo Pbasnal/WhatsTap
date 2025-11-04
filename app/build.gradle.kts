@@ -4,6 +4,11 @@ plugins {
     id("kotlin-kapt")
 }
 
+// Load keystore properties
+val keystorePropertiesFile = rootProject.file("keystore.properties")
+val keystoreProperties = java.util.Properties()
+keystoreProperties.load(keystorePropertiesFile.inputStream())
+
 android {
     namespace = "com.originb.whatstap2"
     compileSdk = 34
@@ -18,6 +23,15 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    signingConfigs {
+        create("release") {
+            storeFile = file(keystoreProperties["storeFile"] as String)
+            storePassword = System.getenv("ORG_GRADLE_PROJECT_RELEASE_STORE_PASSWORD") ?: ""
+            keyAlias = keystoreProperties["keyAlias"] as String
+            keyPassword = System.getenv("ORG_GRADLE_PROJECT_RELEASE_KEY_PASSWORD") ?: ""
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
@@ -25,6 +39,7 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            signingConfig = signingConfigs.getByName("release")
         }
     }
     compileOptions {
